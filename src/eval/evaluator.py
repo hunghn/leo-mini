@@ -1,0 +1,234 @@
+"""
+Benchmark Evaluator for LEO-MINI (Section 4, Appendix A.1).
+
+Uses the lmms-eval framework (same as LLaVA) to evaluate on the 12 benchmarks
+reported in the paper.  Can also run a quick evaluation on a small subset for
+rapid verification (used in the Colab demo).
+
+Benchmarks (Table 1, 2, 3 of the paper):
+  MME, MMBench, SEED-Bench, GQA, ScienceQA, MMMU, POPE,
+  AI2D, TextVQA, ChartQA, OCRBench, VizWiz
+
+Usage (GPU server, full eval):
+  python -m src.eval.evaluator \
+      --model_path checkpoints/leomini_stage3 \
+      --tasks mme,mmbench,seedbench,gqa,scienceqa,mmmu,pope,ai2d,textvqa,chartqa,ocrbench \
+      --output_dir results/
+
+Usage (Colab, quick eval):
+  python -m src.eval.evaluator \
+      --model_path /content/drive/MyDrive/leomini_stage3 \
+      --tasks pope,textvqa,scienceqa \
+      --limit 500 \
+      --load_in_4bit
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+from typing import Dict, List, Optional
+
+
+# ---------------------------------------------------------------------------
+# Benchmark metadata
+# ---------------------------------------------------------------------------
+
+BENCHMARK_CONFIG: Dict[str, Dict] = {
+    "mme":        {"lmms_task": "mme",           "metric": "mme_perception_score", "target": 1583.0},
+    "mmbench":    {"lmms_task": "mmbench_en_dev", "metric": "mmbench_overall",     "target": 77.0},
+    "seedbench":  {"lmms_task": "seedbench",      "metric": "seedbench_overall",   "target": 75.8},
+    "gqa":        {"lmms_task": "gqa",            "metric": "gqa_exact_match",     "target": 64.5},
+    "scienceqa":  {"lmms_task": "scienceqa_img",  "metric": "scienceqa_acc",       "target": 84.5},
+    "mmmu":       {"lmms_task": "mmmu_val",       "metric": "mmmu_acc",            "target": 38.8},
+    "pope":       {"lmms_task": "pope",           "metric": "pope_acc",            "target": 90.3},
+    "ai2d":       {"lmms_task": "ai2d",           "metric": "ai2d_acc",            "target": 75.7},
+    "textvqa":    {"lmms_task": "textvqa_val",    "metric": "textvqa_acc",         "target": 75.1},
+    "chartqa":    {"lmms_task": "chartqa",        "metric": "chartqa_relaxed_acc", "target": 80.5},
+    "ocrbench":   {"lmms_task": "ocrbench",       "metric": "ocrbench_acc",        "target": 62.4},
+    "vizviz":     {"lmms_task": "vqav2_val",      "metric": "vqav2_acc",           "target": 69.3},
+}
+
+ALL_TASKS = list(BENCHMARK_CONFIG.keys())
+
+
+# ---------------------------------------------------------------------------
+# lmms-eval wrapper
+# ---------------------------------------------------------------------------
+
+class LeoMiniEvaluator:
+    """
+    Wrapper around lmms-eval CLI.
+
+    Args:
+        model_path:   path to LeoMini checkpoint (or HuggingFace model id)
+        output_dir:   directory to save results JSON
+        limit:        max samples per task (None = full eval)
+        load_in_4bit: use 4-bit quantisation (for Colab T4)
+        batch_size:   lmms-eval batch size
+    """
+
+    def __init__(
+        self,
+        model_path:   str,
+        output_dir:   str = "results",
+        limit:        Optional[int] = None,
+        load_in_4bit: bool = False,
+        batch_size:   int  = 1,
+        num_fewshot:  int  = 0,
+    ) -> None:
+        self.model_path   = model_path
+        self.output_dir   = Path(output_dir)
+        self.limit        = limit
+        self.load_in_4bit = load_in_4bit
+        self.batch_size   = batch_size
+        self.num_fewshot  = num_fewshot
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+    def run(
+        self,
+        tasks: Optional[List[str]] = None,
+    ) -> Dict[str, float]:
+        """
+        Run lmms-eval on the specified tasks (default: all benchmarks).
+        Returns dict {task_name: score}.
+        """
+        if tasks is None:
+            tasks = ALL_TASKS
+
+        results: Dict[str, float] = {}
+        for task in tasks:
+            cfg = BENCHMARK_CONFIG.get(task)
+            if cfg is None:
+                print(f"Unknown task '{task}', skipping.")
+                continue
+
+            score = self._run_single_task(task, cfg["lmms_task"])
+            results[task] = score
+            target = cfg["target"]
+            diff   = f"+{score - target:.1f}" if score >= target else f"{score - target:.1f}"
+            print(f"  {task:12s}: {score:.1f}  (target {target:.1f}, {diff})")
+
+        # Save results
+        out_file = self.output_dir / "results.json"
+        with open(out_file, "w") as f:
+            json.dump(results, f, indent=2)
+        print(f"\nResults saved to {out_file}")
+        return results
+
+    def _run_single_task(self, task_name: str, lmms_task: str) -> float:
+        """Run lmms-eval for one task, parse and return the primary metric score."""
+        log_dir = self.output_dir / task_name
+        log_dir.mkdir(exist_ok=True)
+
+        model_args = f"pretrained={self.model_path}"
+        if self.load_in_4bit:
+            model_args += ",load_in_4bit=True"
+
+        cmd = [
+            sys.executable, "-m", "lmms_eval",
+            "--model",       "leomini",
+            "--model_args",  model_args,
+            "--tasks",       lmms_task,
+            "--num_fewshot", str(self.num_fewshot),
+            "--batch_size",  str(self.batch_size),
+            "--log_samples",
+            "--output_path", str(log_dir),
+        ]
+
+        if self.limit is not None:
+            cmd += ["--limit", str(self.limit)]
+
+        print(f"\n[Eval] Running {task_name} ...")
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        if result.returncode != 0:
+            print(f"lmms-eval failed for {task_name}:\n{result.stderr[:500]}")
+            return float("nan")
+
+        # Parse score from output JSON
+        return self._parse_score(log_dir, lmms_task, task_name)
+
+    def _parse_score(
+        self, log_dir: Path, lmms_task: str, task_name: str
+    ) -> float:
+        """Load lmms-eval result JSON and extract the primary metric."""
+        result_files = list(log_dir.glob("*.json"))
+        if not result_files:
+            return float("nan")
+        with open(result_files[0]) as f:
+            data = json.load(f)
+        # lmms-eval nests results under data["results"][task_name]
+        task_res = data.get("results", {}).get(lmms_task, {})
+        cfg = BENCHMARK_CONFIG[task_name]
+        metric = cfg["metric"]
+        score = task_res.get(metric, task_res.get(f"{metric},none", float("nan")))
+        return float(score) * 100 if isinstance(score, float) and score <= 1.0 else float(score)
+
+
+# ---------------------------------------------------------------------------
+# Ablation: vary number of visual tokens
+# ---------------------------------------------------------------------------
+
+def run_token_ablation(
+    model_path:  str,
+    output_dir:  str = "results/ablation",
+    token_counts: List[int] = [1, 16, 64, 256],
+    tasks: Optional[List[str]] = None,
+) -> None:
+    """
+    Replicate Table 2 ablation: test different N^V token counts.
+    Requires that the model checkpoint supports configuring n_visual at load time.
+    """
+    if tasks is None:
+        tasks = ["mme", "pope", "textvqa", "scienceqa"]
+
+    print("\n=== Visual Token Ablation ===")
+    for n in token_counts:
+        print(f"\n--- N^V = {n} ---")
+        evaluator = LeoMiniEvaluator(
+            model_path=f"{model_path}?n_visual={n}",
+            output_dir=os.path.join(output_dir, f"n{n}"),
+            batch_size=1,
+        )
+        evaluator.run(tasks)
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Evaluate LEO-MINI on vision-language benchmarks")
+    parser.add_argument("--model_path",   required=True)
+    parser.add_argument("--tasks",        default=",".join(ALL_TASKS))
+    parser.add_argument("--output_dir",   default="results")
+    parser.add_argument("--limit",        type=int, default=None, help="Samples per task (None=full)")
+    parser.add_argument("--load_in_4bit", action="store_true", help="4-bit quant for Colab T4")
+    parser.add_argument("--batch_size",   type=int, default=1)
+    parser.add_argument("--ablation",     action="store_true", help="Run token count ablation")
+    args = parser.parse_args()
+
+    tasks = [t.strip() for t in args.tasks.split(",")]
+
+    if args.ablation:
+        run_token_ablation(args.model_path, args.output_dir, tasks=tasks)
+    else:
+        evaluator = LeoMiniEvaluator(
+            model_path=args.model_path,
+            output_dir=args.output_dir,
+            limit=args.limit,
+            load_in_4bit=args.load_in_4bit,
+            batch_size=args.batch_size,
+        )
+        results = evaluator.run(tasks)
+
+        print("\n=== Summary ===")
+        for task, score in results.items():
+            target = BENCHMARK_CONFIG[task]["target"]
+            status = "✓" if score >= target else "✗"
+            print(f"  {status} {task:12s}: {score:.1f} / {target:.1f}")

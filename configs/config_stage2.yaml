@@ -1,0 +1,35 @@
+# Stage 2 — Full Supervised Fine-tuning
+# Trainable: all (LLM + MMoE-Vision + Projector) | Frozen: —
+# Data: EAGLE SFT dataset
+
+stage: 2
+llm_path: "checkpoints/stage1/checkpoint-last"
+
+eagle_data_path: ""
+eagle_sft_path:  "data/eagle/sft.json"
+llava_data_path: ""
+image_dir:       "data/images"
+output_dir:      "checkpoints"
+
+# Architecture
+n_visual:    64
+d_proj_cotr: 256
+lora_rank:   16
+num_special: 3
+
+# Optimisation
+learning_rate:         2.0e-5
+per_device_batch_size: 8
+gradient_accumulation: 8
+num_epochs:            1
+warmup_ratio:          0.03
+max_grad_norm:         1.0
+weight_decay:          0.0
+lr_scheduler_type:     "cosine"
+max_length:            2048
+dataloader_workers:    4
+save_steps:            500
+logging_steps:         10
+bf16:                  true
+
+deepspeed: "configs/deepspeed_zero2.json"

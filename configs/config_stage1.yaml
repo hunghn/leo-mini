@@ -1,0 +1,35 @@
+# Stage 1 — Warmup Visual Projector
+# Trainable: projector only | Frozen: LLM + MMoE-Vision
+# Data: EAGLE alignment dataset
+
+stage: 1
+llm_path: "meta-llama/Meta-Llama-3-8B-Instruct"
+
+eagle_data_path: "data/eagle/alignment.json"
+eagle_sft_path:  ""
+llava_data_path: ""
+image_dir:       "data/images"
+output_dir:      "checkpoints"
+
+# Architecture
+n_visual:    64
+d_proj_cotr: 256
+lora_rank:   16
+num_special: 3
+
+# Optimisation
+learning_rate:         1.0e-3
+per_device_batch_size: 16
+gradient_accumulation: 4
+num_epochs:            1
+warmup_ratio:          0.03
+max_grad_norm:         1.0
+weight_decay:          0.0
+lr_scheduler_type:     "cosine"
+max_length:            2048
+dataloader_workers:    4
+save_steps:            500
+logging_steps:         10
+bf16:                  true
+
+deepspeed: "configs/deepspeed_zero2.json"

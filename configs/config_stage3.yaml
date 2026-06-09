@@ -1,0 +1,39 @@
+# Stage 3 — Token Reduction Fine-tuning (core LEO-MINI contribution)
+# Trainable: CoTR + MMoE-LLM (LoRA adapters + routers)
+# Frozen:    LLM backbone weights, MMoE-Vision
+# Data:      LLaVA-v1.5 665K instruction data
+# Loss:      Cross-entropy + L_balance (λ=0.05)
+
+stage: 3
+# Start from EAGLE Stage-2 checkpoint (or LLaVA-1.5-7B as baseline)
+llm_path: "checkpoints/stage2/checkpoint-last"
+
+eagle_data_path: ""
+eagle_sft_path:  ""
+llava_data_path: "data/llava_v1_5/llava_v1_5_mix665k.json"
+image_dir:       "data/images"
+output_dir:      "checkpoints"
+
+# Architecture — matches paper Table 6 / Section 4.1
+n_visual:    64        # N^V: 576 → 64 tokens via CoTR
+d_proj_cotr: 256       # common projection dim for CoTR attention
+lora_rank:   16        # LoRA rank for all expert adapters
+num_special: 3         # E=3 special LoRA experts
+
+# Optimisation
+learning_rate:         2.0e-5
+per_device_batch_size: 8
+gradient_accumulation: 8
+num_epochs:            1
+warmup_ratio:          0.03
+max_grad_norm:         1.0
+weight_decay:          0.0
+lr_scheduler_type:     "cosine"
+max_length:            2048
+dataloader_workers:    4
+save_steps:            500
+logging_steps:         10
+bf16:                  true
+balance_loss_lambda:   0.05
+
+deepspeed: "configs/deepspeed_zero2.json"
