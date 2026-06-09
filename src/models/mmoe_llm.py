@@ -18,6 +18,7 @@ Balanced loss (Eq. balance, λ=0.05):
 
 from __future__ import annotations
 
+import math
 from typing import Optional, Tuple
 
 import torch
@@ -72,9 +73,6 @@ class LoRALayer(nn.Module):
         return self.lora_B(self.lora_A(x)) * self.scale
 
 
-import math  # noqa: E402  (placed after LoRALayer to keep it near usage)
-
-
 # ---------------------------------------------------------------------------
 # Router
 # ---------------------------------------------------------------------------
@@ -88,15 +86,23 @@ class MMoERouter(nn.Module):
     Output: routing probability R ∈ R^{E} (before top-k selection).
 
     Args:
-        d_hidden:    LLM hidden dimension (= d_in of the linear being replaced)
-        d_context:   projected dim for visual/text global repr (default 128)
-        num_experts: number of special experts E (default 3)
+        d_hidden:     dim of x  (= d_in of down_proj = intermediate_size, e.g. 14336)
+        d_hidden_ctx: dim of visual/text context tensors (= d_LLM = hidden_size, e.g. 4096)
+        d_context:    projected dim for visual/text global repr (default 128)
+        num_experts:  number of special experts E (default 3)
     """
 
-    def __init__(self, d_hidden: int, d_context: int = 128, num_experts: int = 3) -> None:
+    def __init__(
+        self,
+        d_hidden:     int,
+        d_hidden_ctx: int,
+        d_context:    int = 128,
+        num_experts:  int = 3,
+    ) -> None:
         super().__init__()
-        self.proj_visual = nn.Linear(d_hidden, d_context, bias=False)
-        self.proj_text   = nn.Linear(d_hidden, d_context, bias=False)
+        # Project visual/text (in d_LLM space) to small d_context vectors
+        self.proj_visual = nn.Linear(d_hidden_ctx, d_context, bias=False)
+        self.proj_text   = nn.Linear(d_hidden_ctx, d_context, bias=False)
 
         d_in = d_hidden + 2 * d_context
         # Hidden size = d_hidden // 4 (keeps router lightweight)
@@ -161,8 +167,9 @@ class MMoELinear(nn.Module):
         d_context:       int = 128,
     ) -> None:
         super().__init__()
-        d_in  = original_linear.in_features
-        d_out = original_linear.out_features
+        d_in  = original_linear.in_features   # intermediate_size (e.g. 14336)
+        d_out = original_linear.out_features   # hidden_size = d_LLM (e.g. 4096)
+        self._d_out = d_out
 
         # f_ORI: frozen original weight
         self.original = original_linear
@@ -178,8 +185,13 @@ class MMoELinear(nn.Module):
             [LoRALayer(d_in, d_out, rank=lora_rank, alpha=lora_alpha) for _ in range(num_special)]
         )
 
-        # Router
-        self.router = MMoERouter(d_in, d_context=d_context, num_experts=num_special)
+        # Router: x is in d_in (intermediate) space; visual/text are in d_out (d_LLM) space
+        self.router = MMoERouter(
+            d_hidden=d_in,
+            d_hidden_ctx=d_out,
+            d_context=d_context,
+            num_experts=num_special,
+        )
 
         # Shared context buffer (set externally before LLM forward)
         self.ctx = context_buffer
@@ -224,7 +236,7 @@ class MMoELinear(nn.Module):
         # Straight-through estimator: gradient flows via probs
         routing_weights = one_hot + (probs - probs.detach())          # (B, seq_len, E)
 
-        expert_out = torch.zeros_like(x[..., :self.original.out_features])
+        expert_out = x.new_zeros(*x.shape[:-1], self._d_out)
         for e, expert in enumerate(self.lora_experts):
             w_e = routing_weights[..., e].unsqueeze(-1)               # (B, seq_len, 1)
             expert_out = expert_out + w_e * expert(x)

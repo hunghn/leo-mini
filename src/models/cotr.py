@@ -91,8 +91,8 @@ class CoTR(nn.Module):
         T_hat = self.proj_T(text_tokens)
 
         # Global text representation: (B, 1, d_proj)
-        # Corresponds to "1 · T̂" in Eq. 5 — mean over text token positions
-        T_global = T_hat.mean(dim=1, keepdim=True)
+        # "1 · T̂" in Eq. 5: 1 is a ones-vector → sum over all text token positions
+        T_global = T_hat.sum(dim=1, keepdim=True)
 
         consolidated: List[torch.Tensor] = []
 
@@ -109,28 +109,29 @@ class CoTR(nn.Module):
             # s_QUERY = Q̄_i · Ī_i^T ∈ R^{B, N^V, N_i}
             s_query = torch.bmm(Q_bar_i, I_bar_i.transpose(1, 2))
 
-            # Eq. 3 — self-attention: **1** · Ī_i · Ī_i^T ∈ R^{B, 1, N_i}
-            # "1" acts as a summation vector over the token axis, giving the
-            # global representation of expert i that attends to each token.
-            I_global = I_bar_i.mean(dim=1, keepdim=True)          # (B, 1, d_proj)
+            # Eq. 3 — self-attention: 1 · Ī_i · Ī_i^T ∈ R^{B, 1, N_i}
+            # "1" is a ones-vector: sum all projected tokens of expert i (not mean).
+            I_global = I_bar_i.sum(dim=1, keepdim=True)              # (B, 1, d_proj)
             s_self   = torch.bmm(I_global, I_bar_i.transpose(1, 2))  # (B, 1, N_i)
 
-            # Eq. 4 — cross-expert attention: Σ_{j≠i} mean(Ī_j) · Ī_i^T ∈ R^{B, 1, N_i}
-            # Aggregates global representations from all other experts.
+            # Eq. 4 — cross-expert attention: Σ_{j≠i} 1·Ī_j · Ī_i^T ∈ R^{B, 1, N_i}
+            # Sum (not mean) all tokens of each other expert, then dot with expert i.
             s_cross = I_bar_i.new_zeros(B, 1, N_i)
             for j in range(self.m):
                 if j != i:
-                    I_j_global = I_bars[j].mean(dim=1, keepdim=True)  # (B, 1, d_proj)
+                    I_j_global = I_bars[j].sum(dim=1, keepdim=True)  # (B, 1, d_proj)
                     s_cross = s_cross + torch.bmm(
                         I_j_global, I_bar_i.transpose(1, 2)
                     )
 
-            # Eq. 5 — text-visual attention: **1** · T̂ · Ī_i^T ∈ R^{B, 1, N_i}
+            # Eq. 5 — text-visual attention: 1 · T̂ · Ī_i^T ∈ R^{B, 1, N_i}
+            # T_global is the sum of all projected text tokens (computed above).
             s_text = torch.bmm(T_global, I_bar_i.transpose(1, 2))    # (B, 1, N_i)
 
-            # Eq. 6 — aggregate and normalise (scale by √d_proj, the dot-product space dim)
+            # Eq. 6 — normalise by √d_i^V (original expert feature dim, per paper).
+            # All dot products are in d_proj space, but the paper prescribes d_i^V.
             # Broadcast: s_query (B, N^V, N_i) + others (B, 1, N_i) → (B, N^V, N_i)
-            scale    = math.sqrt(self.d_proj)
+            scale    = math.sqrt(self.expert_dims[i])
             attn_raw = (s_query + s_self + s_cross + s_text) / scale
             alpha_i  = torch.softmax(attn_raw, dim=-1)               # (B, N^V, N_i)
 

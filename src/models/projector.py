@@ -23,10 +23,13 @@ class VisualProjector(nn.Module):
     """
     2-layer MLP projector.
 
+    Architecture per PLAN.md Section 2.3:
+      Linear(d^V → d_hidden) → GELU → Linear(d_hidden → d_LLM)
+
     Args:
         d_visual:  input feature dim d^V = Σ expert_dims  (e.g. 4864)
         d_llm:     LLM hidden dim d_LLM                  (e.g. 4096)
-        d_hidden:  inner hidden dim (default = d_llm)
+        d_hidden:  inner hidden dim (default = 4 * d_llm, per PLAN.md)
     """
 
     def __init__(
@@ -37,7 +40,7 @@ class VisualProjector(nn.Module):
     ) -> None:
         super().__init__()
         if d_hidden is None:
-            d_hidden = d_llm
+            d_hidden = 4 * d_llm
 
         self.proj = nn.Sequential(
             nn.Linear(d_visual, d_hidden),

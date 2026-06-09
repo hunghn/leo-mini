@@ -29,6 +29,7 @@ from typing import Dict, List, Optional
 import torch
 from torch.utils.data import DataLoader, Dataset
 from transformers import (
+    AutoProcessor,
     AutoTokenizer,
     CLIPImageProcessor,
     Trainer,
@@ -39,6 +40,7 @@ from transformers.trainer_utils import get_last_checkpoint
 from ..data.dataset import EAGLEDataset, LLaVADataset
 from ..data.collator import LeoMiniCollator
 from ..models.leo_mini import LeoMini
+from ..models.vision_experts import Pix2StructExpert
 
 
 # ---------------------------------------------------------------------------
@@ -48,13 +50,17 @@ from ..models.leo_mini import LeoMini
 @dataclass
 class LeoMiniTrainingArgs:
     # --- Paths ---
-    llm_path:          str = "meta-llama/Meta-Llama-3-8B-Instruct"
-    eagle_data_path:   str = ""   # alignment JSON  (Stage 1)
-    eagle_sft_path:    str = ""   # full SFT JSON   (Stage 2)
-    llava_data_path:   str = ""   # LLaVA-v1.5 JSON (Stage 3)
-    image_dir:         str = ""   # root for image files
-    output_dir:        str = "checkpoints"
-    resume_from:       Optional[str] = None   # checkpoint to resume from
+    llm_path:              str = "meta-llama/Meta-Llama-3-8B-Instruct"
+    eagle_data_path:       str = ""   # alignment JSON  (Stage 1)
+    eagle_sft_path:        str = ""   # full SFT JSON   (Stage 2)
+    llava_data_path:       str = ""   # LLaVA-v1.5 JSON (Stage 3)
+    image_dir:             str = ""   # root for image files
+    output_dir:            str = "checkpoints"
+    resume_from:           Optional[str] = None   # checkpoint to resume from
+    # projector_path: path to projector_weights.pt saved at end of Stage 1 or 2.
+    # Required for Stage 3 so that trained projector weights are not discarded.
+    projector_path:        Optional[str] = None
+    pix2struct_model_name: str = "google/pix2struct-large"
 
     # --- Architecture ---
     n_visual:     int = 64
@@ -77,6 +83,7 @@ class LeoMiniTrainingArgs:
     save_steps:             int   = 500
     logging_steps:          int   = 10
     bf16:                   bool  = True
+    fp16:                   bool  = False
     deepspeed:              Optional[str] = "configs/deepspeed_zero2.json"
     balance_loss_lambda:    float = 0.05
 
@@ -114,22 +121,38 @@ class LeoMiniTrainer(Trainer):
 
 def train(args: LeoMiniTrainingArgs) -> None:
     # --- Load model ---
-    use_stage3 = args.stage == 3
+    if args.stage == 3 and args.projector_path is None:
+        print(
+            "WARNING: Stage 3 training started without projector_path. "
+            "The projector will be randomly initialised, discarding Stage 1/2 training. "
+            "Set projector_path to the projector_weights.pt saved at the end of Stage 2."
+        )
     model = LeoMini.from_pretrained(
         llm_path=args.llm_path,
-        cotr_path=None,
-        stage3_weights=None,
+        projector_path=args.projector_path,
+        enable_stage3_modules=(args.stage == 3),
         n_visual=args.n_visual,
         d_proj=args.d_proj_cotr,
         lora_rank=args.lora_rank,
         num_special=args.num_special,
+        balance_loss_lambda=args.balance_loss_lambda,
     )
     model.set_stage(args.stage)
 
     # --- Dataset ---
-    tokenizer       = model.tokenizer
-    image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14-336")
-    collator        = LeoMiniCollator(
+    tokenizer        = model.tokenizer
+    image_processor  = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14-336")
+
+    # Only load Pix2Struct processor if the model actually has a Pix2Struct expert.
+    # This avoids loading the processor when the expert set is customised to
+    # exclude it (e.g. a future Vicuna-7B variant without Pix2Struct).
+    _has_pix2struct = any(isinstance(e, Pix2StructExpert) for e in model.vision.experts)
+    pix2struct_processor = (
+        AutoProcessor.from_pretrained(args.pix2struct_model_name)
+        if _has_pix2struct else None
+    )
+
+    collator = LeoMiniCollator(
         pad_token_id=tokenizer.pad_token_id or 0,
         max_length=args.max_length,
     )
@@ -149,6 +172,7 @@ def train(args: LeoMiniTrainingArgs) -> None:
         image_dir=args.image_dir,
         tokenizer=tokenizer,
         image_processor=image_processor,
+        pix2struct_processor=pix2struct_processor,
         max_length=args.max_length,
     )
 
@@ -167,7 +191,7 @@ def train(args: LeoMiniTrainingArgs) -> None:
         save_steps=args.save_steps,
         save_total_limit=2,
         bf16=args.bf16,
-        fp16=not args.bf16,
+        fp16=args.fp16,
         dataloader_num_workers=args.dataloader_workers,
         remove_unused_columns=False,
         report_to="tensorboard",
@@ -191,13 +215,19 @@ def train(args: LeoMiniTrainingArgs) -> None:
 
     trainer.train(resume_from_checkpoint=last_ckpt)
 
-    # --- Save Stage 3 (only CoTR + MMoE-LLM adapters) ---
+    # --- Save checkpoint ---
     if args.stage == 3:
+        # Save projector + CoTR + MMoE-LLM adapters
         model.save_stage3_weights(
             os.path.join(training_args.output_dir, "stage3_adapter_weights.pt")
         )
     else:
+        # Full model save for Stages 1 and 2
         trainer.save_model()
+        # Also save projector separately so Stage 3 can restore it via projector_path
+        model.save_projector_weights(
+            os.path.join(training_args.output_dir, "projector_weights.pt")
+        )
 
     print("Training complete.")
 

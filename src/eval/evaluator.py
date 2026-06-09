@@ -33,6 +33,12 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
+# Wrapper script that imports the LEO-MINI lmms-eval adapter before delegating
+# to lmms-eval's CLI.  Using a wrapper (rather than `python -m lmms_eval`) is
+# necessary because the adapter must be imported in the same process as
+# lmms-eval for the @register_model decorator to take effect.
+_EVAL_WRAPPER = str(Path(__file__).resolve().parent.parent.parent / "scripts" / "run_eval_leomini.py")
+
 
 # ---------------------------------------------------------------------------
 # Benchmark metadata
@@ -48,9 +54,10 @@ BENCHMARK_CONFIG: Dict[str, Dict] = {
     "pope":       {"lmms_task": "pope",           "metric": "pope_acc",            "target": 90.3},
     "ai2d":       {"lmms_task": "ai2d",           "metric": "ai2d_acc",            "target": 75.7},
     "textvqa":    {"lmms_task": "textvqa_val",    "metric": "textvqa_acc",         "target": 75.1},
-    "chartqa":    {"lmms_task": "chartqa",        "metric": "chartqa_relaxed_acc", "target": 80.5},
-    "ocrbench":   {"lmms_task": "ocrbench",       "metric": "ocrbench_acc",        "target": 62.4},
-    "vizviz":     {"lmms_task": "vqav2_val",      "metric": "vqav2_acc",           "target": 69.3},
+    "chartqa":    {"lmms_task": "chartqa",         "metric": "chartqa_relaxed_acc", "target": 80.5},
+    "ocrbench":   {"lmms_task": "ocrbench",        "metric": "ocrbench_acc",        "target": 62.4},
+    "vizwiz":     {"lmms_task": "vizwiz_vqa_val",  "metric": "vizwiz_vqa_acc",      "target": 69.3},
+    "docvqa":     {"lmms_task": "docvqa_val",      "metric": "docvqa_acc",          "target": None},
 }
 
 ALL_TASKS = list(BENCHMARK_CONFIG.keys())
@@ -74,19 +81,21 @@ class LeoMiniEvaluator:
 
     def __init__(
         self,
-        model_path:   str,
-        output_dir:   str = "results",
-        limit:        Optional[int] = None,
-        load_in_4bit: bool = False,
-        batch_size:   int  = 1,
-        num_fewshot:  int  = 0,
+        model_path:       str,
+        output_dir:       str  = "results",
+        limit:            Optional[int] = None,
+        load_in_4bit:     bool = False,
+        batch_size:       int  = 1,
+        num_fewshot:      int  = 0,
+        extra_model_args: str  = "",
     ) -> None:
-        self.model_path   = model_path
-        self.output_dir   = Path(output_dir)
-        self.limit        = limit
-        self.load_in_4bit = load_in_4bit
-        self.batch_size   = batch_size
-        self.num_fewshot  = num_fewshot
+        self.model_path       = model_path
+        self.output_dir       = Path(output_dir)
+        self.limit            = limit
+        self.load_in_4bit     = load_in_4bit
+        self.batch_size       = batch_size
+        self.num_fewshot      = num_fewshot
+        self.extra_model_args = extra_model_args
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def run(
@@ -110,8 +119,11 @@ class LeoMiniEvaluator:
             score = self._run_single_task(task, cfg["lmms_task"])
             results[task] = score
             target = cfg["target"]
-            diff   = f"+{score - target:.1f}" if score >= target else f"{score - target:.1f}"
-            print(f"  {task:12s}: {score:.1f}  (target {target:.1f}, {diff})")
+            if target is not None:
+                diff = f"+{score - target:.1f}" if score >= target else f"{score - target:.1f}"
+                print(f"  {task:12s}: {score:.1f}  (target {target:.1f}, {diff})")
+            else:
+                print(f"  {task:12s}: {score:.1f}  (no target)")
 
         # Save results
         out_file = self.output_dir / "results.json"
@@ -128,9 +140,13 @@ class LeoMiniEvaluator:
         model_args = f"pretrained={self.model_path}"
         if self.load_in_4bit:
             model_args += ",load_in_4bit=True"
+        if self.extra_model_args:
+            model_args += f",{self.extra_model_args}"
 
+        # Run via the wrapper so that the LEO-MINI lmms-eval adapter is
+        # registered before lmms-eval parses --model leomini.
         cmd = [
-            sys.executable, "-m", "lmms_eval",
+            sys.executable, _EVAL_WRAPPER,
             "--model",       "leomini",
             "--model_args",  model_args,
             "--tasks",       lmms_task,
@@ -190,10 +206,12 @@ def run_token_ablation(
     print("\n=== Visual Token Ablation ===")
     for n in token_counts:
         print(f"\n--- N^V = {n} ---")
+        # n_visual is passed via model_args (lmms-eval CLI format), not URL query string
         evaluator = LeoMiniEvaluator(
-            model_path=f"{model_path}?n_visual={n}",
+            model_path=model_path,
             output_dir=os.path.join(output_dir, f"n{n}"),
             batch_size=1,
+            extra_model_args=f"n_visual={n}",
         )
         evaluator.run(tasks)
 
@@ -230,5 +248,8 @@ if __name__ == "__main__":
         print("\n=== Summary ===")
         for task, score in results.items():
             target = BENCHMARK_CONFIG[task]["target"]
-            status = "✓" if score >= target else "✗"
-            print(f"  {status} {task:12s}: {score:.1f} / {target:.1f}")
+            if target is not None:
+                status = "✓" if score >= target else "✗"
+                print(f"  {status} {task:12s}: {score:.1f} / {target:.1f}")
+            else:
+                print(f"  - {task:12s}: {score:.1f}")

@@ -62,23 +62,25 @@ class LeoMini(nn.Module):
 
     def __init__(
         self,
-        llm:           LlamaForCausalLM,
-        vision:        MMoEVision,
-        projector:     VisualProjector,
-        tokenizer:     AutoTokenizer,
-        cotr:          Optional[CoTR] = None,
-        use_mmoe_llm:  bool = False,
-        n_visual:      int  = 64,
-        lora_rank:     int  = 16,
-        num_special:   int  = 3,
+        llm:                  LlamaForCausalLM,
+        vision:               MMoEVision,
+        projector:            VisualProjector,
+        tokenizer:            AutoTokenizer,
+        cotr:                 Optional[CoTR] = None,
+        use_mmoe_llm:         bool  = False,
+        n_visual:             int   = 64,
+        lora_rank:            int   = 16,
+        num_special:          int   = 3,
+        balance_loss_lambda:  float = 0.05,
     ) -> None:
         super().__init__()
-        self.llm       = llm
-        self.vision    = vision
-        self.projector = projector
-        self.tokenizer = tokenizer
-        self.cotr      = cotr
-        self.n_visual  = n_visual
+        self.llm                 = llm
+        self.vision              = vision
+        self.projector           = projector
+        self.tokenizer           = tokenizer
+        self.cotr                = cotr
+        self.n_visual            = n_visual
+        self.balance_loss_lambda = balance_loss_lambda
 
         # Context buffer shared by all MMoELinear layers
         self.ctx_buffer = ContextBuffer()
@@ -106,7 +108,7 @@ class LeoMini(nn.Module):
 
           Stage 1: projector only
           Stage 2: all modules
-          Stage 3: cotr + mmoe_llm (down_proj LoRAs + routers)
+          Stage 3: projector + cotr + mmoe_llm (down_proj LoRAs + routers)
         """
         # Freeze everything first
         for p in self.parameters():
@@ -121,7 +123,10 @@ class LeoMini(nn.Module):
                 p.requires_grad_(True)
 
         elif stage == 3:
-            # CoTR
+            # Visual Projector remains trainable in Stage 3 (paper Table 6)
+            for p in self.projector.parameters():
+                p.requires_grad_(True)
+            # CoTR: randomly initialised and fine-tuned (paper Appendix A.2)
             if self.cotr is not None:
                 for p in self.cotr.parameters():
                     p.requires_grad_(True)
@@ -214,11 +219,15 @@ class LeoMini(nn.Module):
             inputs_embeds = text_embeds
             self.ctx_buffer.clear()
 
-        # 5. Build attention mask for merged sequence
-        if attention_mask is not None and pixel_values is not None:
-            attention_mask = self._merge_attention_mask(
-                attention_mask, vis_tokens.shape[1], input_ids
-            )
+        # 5. Build attention mask and labels for merged sequence
+        if pixel_values is not None:
+            n_vis = vis_tokens.shape[1]
+            if attention_mask is not None:
+                attention_mask = self._merge_attention_mask(
+                    attention_mask, n_vis, input_ids
+                )
+            if labels is not None:
+                labels = self._merge_labels(labels, n_vis, input_ids)
 
         # 6. LLM forward
         outputs = self.llm(
@@ -232,7 +241,7 @@ class LeoMini(nn.Module):
         if self.training and any(
             m.__class__.__name__ == "MMoELinear" for m in self.llm.modules()
         ):
-            balance_loss = collect_balance_loss(self.llm, lambda_balance=0.05)
+            balance_loss = collect_balance_loss(self.llm, lambda_balance=self.balance_loss_lambda)
             if outputs.loss is not None:
                 outputs = outputs.__class__(
                     loss=outputs.loss + balance_loss,
@@ -282,6 +291,37 @@ class LeoMini(nn.Module):
         for b, seq in enumerate(merged):
             padded[b, :seq.shape[0]] = seq
         return padded
+
+    def _merge_labels(
+        self,
+        labels:    torch.Tensor,   # (B, L)
+        n_visual:  int,
+        input_ids: torch.Tensor,   # (B, L)
+    ) -> torch.Tensor:
+        """
+        Extend labels to match the merged sequence length (B, L - 1 + N^V).
+        Visual token positions receive IGNORE_INDEX (-100) so they are not
+        included in the cross-entropy loss.
+        """
+        IGNORE = -100
+        B, L = labels.shape
+        new_labels_list = []
+        for b in range(B):
+            img_pos = (input_ids[b] == IMAGE_TOKEN_INDEX).nonzero(as_tuple=True)[0]
+            if len(img_pos) == 0:
+                new_labels_list.append(labels[b])
+                continue
+            pos = img_pos[0].item()
+            before  = labels[b, :pos]
+            vis_lbl = labels.new_full((n_visual,), IGNORE)
+            after   = labels[b, pos + 1:]
+            new_labels_list.append(torch.cat([before, vis_lbl, after]))
+
+        max_len = max(lbl.shape[0] for lbl in new_labels_list)
+        out = labels.new_full((B, max_len), IGNORE)
+        for b, lbl in enumerate(new_labels_list):
+            out[b, :lbl.shape[0]] = lbl
+        return out
 
     def _merge_attention_mask(
         self,
@@ -360,21 +400,30 @@ class LeoMini(nn.Module):
     @classmethod
     def from_pretrained(
         cls,
-        llm_path:       str,
-        tokenizer_path: Optional[str] = None,
-        cotr_path:      Optional[str] = None,
-        stage3_weights: Optional[str] = None,
-        n_visual:       int  = 64,
-        d_proj:         int  = 256,
-        lora_rank:      int  = 16,
-        num_special:    int  = 3,
-        load_in_4bit:   bool = False,
+        llm_path:              str,
+        tokenizer_path:        Optional[str]  = None,
+        projector_path:        Optional[str]  = None,
+        cotr_path:             Optional[str]  = None,
+        stage3_weights:        Optional[str]  = None,
+        enable_stage3_modules: bool           = False,
+        n_visual:              int            = 64,
+        d_proj:                int            = 256,
+        lora_rank:             int            = 16,
+        num_special:           int            = 3,
+        balance_loss_lambda:   float          = 0.05,
+        load_in_4bit:          bool           = False,
         **kwargs,
     ) -> "LeoMini":
         """
         Build LeoMini from a pretrained LLM checkpoint (EAGLE / LLaVA-1.5 style).
 
-        If stage3_weights is provided, loads CoTR + MMoE-LLM weights.
+        projector_path: path to projector_weights.pt saved after Stage 1 or 2.
+            Must be provided for Stage 3 training so that the trained projector is
+            not silently replaced by random initialisation.
+        enable_stage3_modules: set True for Stage 3 training from scratch to
+            randomly initialise CoTR and apply MMoE-LLM.
+        stage3_weights: path to the adapter checkpoint saved by save_stage3_weights();
+            implicitly enables Stage 3 modules and loads projector + CoTR + adapters.
         """
         from transformers import BitsAndBytesConfig
 
@@ -408,10 +457,20 @@ class LeoMini(nn.Module):
         d_llm    = llm.config.hidden_size
         projector = VisualProjector(d_visual, d_llm)
 
-        # CoTR (if stage3_weights provided or explicit cotr_path)
+        # Restore projector weights from a prior training stage if provided.
+        # Without this, Stage 3 would start from a randomly-initialised projector,
+        # discarding all progress from Stages 1 and 2.
+        if projector_path is not None:
+            proj_ckpt = torch.load(projector_path, map_location="cpu")
+            projector.load_state_dict(proj_ckpt, strict=True)
+            print(f"Loaded projector weights from {projector_path}")
+
+        # CoTR + MMoE-LLM: create when explicitly requested (Stage 3 training from
+        # scratch) OR when loading from a saved checkpoint.
+        need_stage3 = enable_stage3_modules or (stage3_weights is not None) or (cotr_path is not None)
         cotr = None
         use_mmoe_llm = False
-        if stage3_weights is not None or cotr_path is not None:
+        if need_stage3:
             cotr = CoTR(
                 expert_dims=vision.expert_dims,
                 d_text=d_llm,
@@ -430,29 +489,64 @@ class LeoMini(nn.Module):
             n_visual=n_visual,
             lora_rank=lora_rank,
             num_special=num_special,
+            balance_loss_lambda=balance_loss_lambda,
         )
 
-        # Load stage-3 weights if provided
+        # Load stage-3 adapter weights if provided
         if stage3_weights is not None:
             ckpt = torch.load(stage3_weights, map_location="cpu")
             missing, unexpected = model.load_state_dict(ckpt, strict=False)
-            print(f"Loaded stage3 weights. Missing: {len(missing)}, Unexpected: {len(unexpected)}")
+            # Log by module group to surface real mismatches
+            missing_groups   = sorted({k.split(".")[0] for k in missing})
+            unexpected_groups = sorted({k.split(".")[0] for k in unexpected})
+            print(
+                f"Loaded stage3 weights — "
+                f"missing keys: {len(missing)} (groups: {missing_groups}), "
+                f"unexpected keys: {len(unexpected)} (groups: {unexpected_groups})"
+            )
+
+        # Load standalone CoTR weights if provided separately
+        if cotr_path is not None and model.cotr is not None:
+            cotr_ckpt = torch.load(cotr_path, map_location="cpu")
+            model.cotr.load_state_dict(cotr_ckpt, strict=True)
+            print(f"Loaded CoTR weights from {cotr_path}")
 
         return model
 
     def save_stage3_weights(self, save_path: str) -> None:
-        """Save only the trainable Stage-3 weights (CoTR + MMoE-LLM adapters)."""
+        """
+        Save Stage-3 trainable weights: projector + CoTR + MMoE-LLM adapters.
+
+        Projector is included because it is trainable in Stage 3 (paper Table 6).
+        Frozen original down_proj weights are excluded — they live in the LLM
+        checkpoint and are restored by from_pretrained at load time.
+        """
         from .mmoe_llm import MMoELinear
         state = {}
+        # Projector (trainable in Stage 3, paper Table 6)
+        for k, v in self.projector.state_dict().items():
+            state[f"projector.{k}"] = v
+        # CoTR
         if self.cotr is not None:
             for k, v in self.cotr.state_dict().items():
                 state[f"cotr.{k}"] = v
+        # MMoE-LLM adapters — skip frozen original down_proj weights
         for name, m in self.llm.named_modules():
             if isinstance(m, MMoELinear):
                 for k, v in m.state_dict().items():
-                    # Skip original (frozen) weights
                     if not k.startswith("original"):
                         state[f"llm.{name}.{k}"] = v
         os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
         torch.save(state, save_path)
         print(f"Saved Stage-3 weights to {save_path}")
+
+    def save_projector_weights(self, save_path: str) -> None:
+        """
+        Save projector state dict for use in subsequent stages.
+
+        Call after Stage 1 or 2 so that Stage 3 can initialise the projector
+        from the trained weights via from_pretrained(projector_path=...).
+        """
+        os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+        torch.save(self.projector.state_dict(), save_path)
+        print(f"Saved projector weights to {save_path}")
