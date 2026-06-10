@@ -117,9 +117,9 @@ hf download meta-llama/Meta-Llama-3-8B-Instruct # 8B (paper gốc)
 
 # Vision experts (tất cả các variant đều dùng chung)
 hf download openai/clip-vit-large-patch14-336
-hf download Yuxin-CV/EVA-02-CLIP-L-14-336
 hf download google/pix2struct-large
-# ConvNeXt-Large-D tải tự động qua open_clip khi khởi tạo
+# EVA-02 CLIP-L-14-336: tải tự động qua open_clip khi khởi tạo (QuanSun/EVA-CLIP)
+# ConvNeXt-Large-D: tải tự động qua open_clip khi khởi tạo
 
 # EAGLE Stage-2 checkpoint (dùng làm điểm khởi đầu Stage 3, thay thế train Stage 1+2)
 hf download NVEagle/Eagle-X4-8B-Plus

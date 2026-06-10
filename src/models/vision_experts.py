@@ -6,7 +6,7 @@ Wraps 4 domain-specific vision experts following the EAGLE design (Shi et al., 2
   Expert         Model ID                                      Tokens  Dim
   ─────────────────────────────────────────────────────────────────────────
   CLIP           openai/clip-vit-large-patch14-336             576     1024
-  EVA-02         Yuxin-CV/EVA-02-CLIP-L-14-336                576     1024
+  EVA-02         EVA02-L-14-336 (open_clip, QuanSun/EVA-CLIP)  576     1024
   ConvNeXt       laion/CLIP-convnext_large_d_320.laion2B-…    576*    768
   Pix2Struct     google/pix2struct-large                       576*    2048
 
@@ -91,26 +91,38 @@ class CLIPExpert(VisionExpert):
 
 class EVA02Expert(VisionExpert):
     """
-    EVA-02 CLIP-L-14-336 (Fang et al., 2024c).
-    Same architecture as CLIP ViT-L, different pre-training.
+    EVA-02 CLIP-L-14-336 (Fang et al., 2024c) loaded via open_clip.
+    Weights: QuanSun/EVA-CLIP (downloaded automatically on first use).
     """
 
     feature_dim = 1024
     n_tokens    = STANDARD_N_TOKENS
 
-    def __init__(self, model_name: str = "Yuxin-CV/EVA-02-CLIP-L-14-336") -> None:
+    def __init__(
+        self,
+        model_name: str = "EVA02-L-14-336",
+        pretrained: str = "merged2b_s6b_b61k",
+    ) -> None:
         super().__init__()
-        # EVA-02 is compatible with CLIPVisionModel
-        self.encoder  = CLIPVisionModel.from_pretrained(model_name)
-        self.processor = CLIPImageProcessor.from_pretrained(model_name)
+        try:
+            import open_clip
+        except ImportError as e:
+            raise ImportError("open_clip required: pip install open-clip-torch") from e
+
+        clip_model, _, self._preprocess = open_clip.create_model_and_transforms(
+            model_name, pretrained=pretrained
+        )
+        self.visual = clip_model.visual
 
     @torch.no_grad()
     def preprocess(self, images: List[Image.Image]) -> torch.Tensor:
-        return self.processor(images=images, return_tensors="pt").pixel_values
+        tensors = [self._preprocess(img) for img in images]
+        return torch.stack(tensors)
 
     def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
-        out = self.encoder(pixel_values=pixel_values)
-        return out.last_hidden_state[:, 1:, :]  # (B, 576, 1024)
+        # forward_features returns (B, 1+N, D) with CLS at index 0
+        features = self.visual.forward_features(pixel_values)
+        return features[:, 1:, :]  # (B, 576, 1024)
 
 
 # ---------------------------------------------------------------------------
