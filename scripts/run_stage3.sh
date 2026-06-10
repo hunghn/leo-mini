@@ -16,7 +16,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(dirname "$SCRIPT_DIR")"
 
-export PYTHONPATH="$ROOT:$PYTHONPATH"
+export PYTHONPATH="$ROOT:${PYTHONPATH:-}"
 export TOKENIZERS_PARALLELISM=false
 
 MODEL_CONFIG="${1:-}"

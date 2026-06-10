@@ -110,19 +110,19 @@ pip install -r requirements.txt
 
 ```bash
 # LLM backbone — chọn 1 trong các backbone sau:
-huggingface-cli download meta-llama/Llama-3.2-1B-Instruct   # 1B (nhẹ nhất)
-huggingface-cli download meta-llama/Llama-3.2-3B-Instruct   # 3B (cân bằng)
-huggingface-cli download microsoft/Phi-3.5-mini-instruct     # Phi (hiệu năng tốt)
-huggingface-cli download meta-llama/Meta-Llama-3-8B-Instruct # 8B (paper gốc)
+hf download meta-llama/Llama-3.2-1B-Instruct   # 1B (nhẹ nhất)
+hf download meta-llama/Llama-3.2-3B-Instruct   # 3B (cân bằng)
+hf download microsoft/Phi-3.5-mini-instruct     # Phi (hiệu năng tốt)
+hf download meta-llama/Meta-Llama-3-8B-Instruct # 8B (paper gốc)
 
 # Vision experts (tất cả các variant đều dùng chung)
-huggingface-cli download openai/clip-vit-large-patch14-336
-huggingface-cli download Yuxin-CV/EVA-02-CLIP-L-14-336
-huggingface-cli download google/pix2struct-large
+hf download openai/clip-vit-large-patch14-336
+hf download Yuxin-CV/EVA-02-CLIP-L-14-336
+hf download google/pix2struct-large
 # ConvNeXt-Large-D tải tự động qua open_clip khi khởi tạo
 
 # EAGLE Stage-2 checkpoint (dùng làm điểm khởi đầu Stage 3, thay thế train Stage 1+2)
-huggingface-cli download NVEagle/Eagle-X4-8B-Plus
+hf download NVEagle/Eagle-X4-8B-Plus
 ```
 
 ---
@@ -290,7 +290,7 @@ Sau khi training, upload `checkpoints/stage3/stage3_adapter_weights.pt` lên Goo
 ### Cài đặt trên Colab
 
 ```python
-!pip install transformers peft bitsandbytes accelerate timm open-clip-torch lmms-eval
+!pip install transformers peft bitsandbytes accelerate timm open-clip-torch lmms-eval huggingface_hub[hf_xet]
 
 from google.colab import drive
 drive.mount('/content/drive')
