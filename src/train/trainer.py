@@ -84,7 +84,14 @@ class LeoMiniTrainingArgs:
     logging_steps:          int   = 10
     bf16:                   bool  = True
     fp16:                   bool  = False
-    deepspeed:              Optional[str] = "configs/deepspeed_zero2.json"
+    # "adamw_torch" (default) | "adamw_bnb_8bit" (bitsandbytes, needed for
+    # Stage 2 with 3B+ models on a single 48 GB GPU to avoid OOM on fp32
+    # Adam optimizer states).
+    optim:                  str   = "adamw_torch"
+    # Recompute activations during backward to trade compute for memory.
+    # Required for Stage 2 with 3B+ models; optional elsewhere.
+    gradient_checkpointing: bool  = False
+    deepspeed:              Optional[str] = None
     balance_loss_lambda:    float = 0.05
 
 
@@ -121,11 +128,17 @@ class LeoMiniTrainer(Trainer):
 
 def train(args: LeoMiniTrainingArgs) -> None:
     # --- Load model ---
-    if args.stage == 3 and args.projector_path is None:
+    # Stage 2 needs Stage 1's trained projector; Stage 3 needs Stage 2's.
+    # When --model_config is used, projector_path is auto-derived in __main__.
+    # This warning fires only when running without --model_config and the user
+    # forgot to set projector_path manually in the stage YAML config.
+    if args.stage in (2, 3) and args.projector_path is None:
         print(
-            "WARNING: Stage 3 training started without projector_path. "
-            "The projector will be randomly initialised, discarding Stage 1/2 training. "
-            "Set projector_path to the projector_weights.pt saved at the end of Stage 2."
+            f"WARNING: Stage {args.stage} training started without projector_path. "
+            f"The projector will be randomly initialised, discarding Stage "
+            f"{args.stage - 1} warmup. "
+            f"Use --model_config (auto-derives the path) or set projector_path "
+            f"explicitly in the stage YAML config."
         )
     model = LeoMini.from_pretrained(
         llm_path=args.llm_path,
@@ -176,6 +189,12 @@ def train(args: LeoMiniTrainingArgs) -> None:
         max_length=args.max_length,
     )
 
+    # Enable gradient checkpointing on the LLM before wrapping with Trainer
+    # so that HuggingFace's Trainer does not attempt to call the method itself
+    # (which would fail for non-HuggingFace nn.Module wrappers like LeoMini).
+    if args.gradient_checkpointing:
+        model.llm.gradient_checkpointing_enable()
+
     # --- HuggingFace TrainingArguments ---
     training_args = TrainingArguments(
         output_dir=os.path.join(args.output_dir, f"stage{args.stage}"),
@@ -192,6 +211,11 @@ def train(args: LeoMiniTrainingArgs) -> None:
         save_total_limit=2,
         bf16=args.bf16,
         fp16=args.fp16,
+        optim=args.optim,
+        # Pass False here — we call gradient_checkpointing_enable() above
+        # directly on model.llm so HuggingFace does not try to call it on
+        # the outer LeoMini nn.Module wrapper (which has no such method).
+        gradient_checkpointing=False,
         dataloader_num_workers=args.dataloader_workers,
         remove_unused_columns=False,
         report_to="tensorboard",
@@ -222,9 +246,22 @@ def train(args: LeoMiniTrainingArgs) -> None:
             os.path.join(training_args.output_dir, "stage3_adapter_weights.pt")
         )
     else:
-        # Full model save for Stages 1 and 2
-        trainer.save_model()
-        # Also save projector separately so Stage 3 can restore it via projector_path
+        # Stages 1 and 2: save two artifacts needed by the next stage —
+        #
+        #  llm_checkpoint/  — LLM weights in HuggingFace format, loadable by
+        #      AutoModelForCausalLM.from_pretrained().  trainer.save_model()
+        #      saves the full LeoMini nn.Module state dict instead, which HF
+        #      cannot load directly and would silently give the wrong weights.
+        #
+        #  projector_weights.pt — projector state dict.  Stage 2 warm-starts
+        #      from Stage 1's trained projector; Stage 3 continues from Stage 2's.
+        #      Without this, each stage re-initialises the projector randomly,
+        #      discarding the previous stage's alignment training.
+        llm_hf_dir = os.path.join(training_args.output_dir, "llm_checkpoint")
+        print(f"[Stage {args.stage}] Saving HF-format LLM to {llm_hf_dir} ...")
+        model.llm.save_pretrained(llm_hf_dir)
+        model.tokenizer.save_pretrained(llm_hf_dir)
+
         model.save_projector_weights(
             os.path.join(training_args.output_dir, "projector_weights.pt")
         )
@@ -237,14 +274,112 @@ def train(args: LeoMiniTrainingArgs) -> None:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import argparse, yaml
+    import argparse, sys, yaml
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True, help="Path to stage YAML config")
+    parser.add_argument(
+        "--model_config",
+        default=None,
+        help=(
+            "Optional model-specific YAML override (e.g. configs/models/llama3_2_3b.yaml). "
+            "Must contain 'base_model_path' (HuggingFace model ID for Stage 1). "
+            "May also contain 'output_dir' (isolates checkpoints per model) and "
+            "other per-model settings (batch size, optim, gradient_checkpointing). "
+            "Do NOT set 'llm_path' in model configs for normal use — the trainer "
+            "auto-derives it from output_dir/stage{n-1}/llm_checkpoint/. "
+            "Set 'llm_path' only to skip stages (e.g. use a pre-trained EAGLE ckpt)."
+        ),
+    )
     cli = parser.parse_args()
 
     with open(cli.config) as f:
         cfg = yaml.safe_load(f)
+
+    if cli.model_config is not None:
+        with open(cli.model_config) as f:
+            model_cfg = yaml.safe_load(f) or {}
+
+        # ── Stage-aware llm_path resolution ──────────────────────────────────
+        #
+        # Model configs use 'base_model_path' (HuggingFace model ID) instead of
+        # 'llm_path' so they cannot accidentally clobber the stage checkpoint paths.
+        #
+        # Resolution priority (first match wins):
+        #
+        #  (1) Explicit 'llm_path' in model_cfg
+        #      → User is manually controlling the LLM path (skip-stage scenario,
+        #        e.g. "llm_path: NVEagle/Eagle-X4-8B-Plus" to go Stage 1→3).
+        #        Honour it without any modification.
+        #
+        #  (2) 'base_model_path' in model_cfg (normal case)
+        #      Stage 1 → base_model_path (load from HuggingFace)
+        #      Stage 2 → output_dir/stage1/llm_checkpoint/   ← saved by train()
+        #      Stage 3 → output_dir/stage2/llm_checkpoint/   ← saved by train()
+        #      If the expected llm_checkpoint/ directory is missing → sys.exit(1).
+        #      No silent fallback: the user must either run the previous stage
+        #      or explicitly set 'llm_path' in the model config to skip it.
+        #
+        #  (3) Neither key in model_cfg
+        #      → Keep whatever llm_path the stage YAML already has.
+
+        base_model_path   = model_cfg.pop("base_model_path", None)
+        explicit_llm_path = model_cfg.get("llm_path")       # before cfg.update()
+
+        # Apply remaining model-specific overrides (output_dir, batch, optim, …)
+        cfg.update(model_cfg)
+
+        stage   = cfg.get("stage", 1)
+        out_dir = cfg.get("output_dir", "checkpoints")
+
+        if explicit_llm_path:
+            # Priority 1: explicit override in model config — trust the user
+            cfg["llm_path"] = explicit_llm_path
+
+        elif base_model_path:
+            # Priority 2: normal multi-stage flow
+            if stage == 1:
+                cfg["llm_path"] = base_model_path
+            else:
+                # train() saves model.llm via save_pretrained() to this exact dir.
+                # AutoModelForCausalLM.from_pretrained() can load it directly.
+                prev_llm_dir = os.path.join(out_dir, f"stage{stage - 1}", "llm_checkpoint")
+                if not os.path.isdir(prev_llm_dir):
+                    print(
+                        f"\nERROR: Stage {stage - 1} LLM checkpoint not found.\n"
+                        f"  Expected: {prev_llm_dir}\n"
+                        f"\n"
+                        f"  Option A — run Stage {stage - 1} first:\n"
+                        f"    bash scripts/run_stage{stage - 1}.sh {cli.model_config}\n"
+                        f"\n"
+                        f"  Option B — skip stages by adding to your model config:\n"
+                        f"    llm_path: \"NVEagle/Eagle-X4-8B-Plus\"  # or any HF model\n",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+                cfg["llm_path"] = prev_llm_dir
+
+        # ── Projector handoff ─────────────────────────────────────────────────
+        #
+        # Stage 2 must warm-start from Stage 1's trained projector; without it
+        # the visual projector is re-initialised randomly and Stage 1 warmup is lost.
+        # Stage 3 continues fine-tuning Stage 2's projector.
+        #
+        # train() saves projector_weights.pt alongside llm_checkpoint/ so the path
+        # is always output_dir/stage{n-1}/projector_weights.pt.
+        #
+        # We auto-set projector_path for both Stage 2 and Stage 3 when --model_config
+        # is used (and the user hasn't set it manually in the stage YAML).
+        if stage in (2, 3) and not cfg.get("projector_path"):
+            prev_proj = os.path.join(out_dir, f"stage{stage - 1}", "projector_weights.pt")
+            cfg["projector_path"] = prev_proj
+            if not os.path.exists(prev_proj):
+                print(
+                    f"\nWARNING: projector_weights.pt not found at '{prev_proj}'.\n"
+                    f"  Stage {stage} will start with a randomly initialized projector,\n"
+                    f"  discarding Stage {stage - 1} warmup. Run Stage {stage - 1} first.\n",
+                    file=sys.stderr,
+                )
 
     args = LeoMiniTrainingArgs(**cfg)
     train(args)

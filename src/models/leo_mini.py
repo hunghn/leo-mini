@@ -28,8 +28,7 @@ import torch
 import torch.nn as nn
 from transformers import (
     AutoTokenizer,
-    LlamaForCausalLM,
-    LlamaConfig,
+    AutoModelForCausalLM,
     GenerationMixin,
 )
 from transformers.modeling_outputs import CausalLMOutputWithPast
@@ -62,7 +61,7 @@ class LeoMini(nn.Module):
 
     def __init__(
         self,
-        llm:                  LlamaForCausalLM,
+        llm:                  AutoModelForCausalLM,
         vision:               MMoEVision,
         projector:            VisualProjector,
         tokenizer:            AutoTokenizer,
@@ -437,17 +436,22 @@ class LeoMini(nn.Module):
             )
 
         print(f"Loading LLM from {llm_path} ...")
-        llm = LlamaForCausalLM.from_pretrained(
+        llm = AutoModelForCausalLM.from_pretrained(
             llm_path,
             quantization_config=quant_config,
-            torch_dtype=torch.float16 if not load_in_4bit else None,
+            torch_dtype=torch.bfloat16 if not load_in_4bit else None,
             device_map="auto",
+            **kwargs,
         )
 
         tok_path = tokenizer_path or llm_path
-        tokenizer = AutoTokenizer.from_pretrained(tok_path, use_fast=False)
+        tokenizer = AutoTokenizer.from_pretrained(tok_path, use_fast=True)
+        # Ensure pad token exists — required for batched training.
+        # Phi uses <|endoftext|> as eos; Llama uses <|eot_id|>.
+        # Both lack a dedicated pad token, so we reuse eos.
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.padding_side = "right"
 
         # Vision experts
         vision = build_mmoe_vision()

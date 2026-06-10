@@ -17,10 +17,11 @@ d_proj_cotr: 256
 lora_rank:   16
 num_special: 3
 
-# Optimisation
+# Optimisation — defaults tuned for a single 48 GB GPU (A6000 / A100).
+# Override batch/accumulation via configs/models/<model>.yaml if needed.
 learning_rate:         1.0e-3
-per_device_batch_size: 16
-gradient_accumulation: 4
+per_device_batch_size: 4        # 16 → 4  (single GPU)
+gradient_accumulation: 16       #  4 → 16 (effective batch = 64)
 num_epochs:            1
 warmup_ratio:          0.03
 max_grad_norm:         1.0
@@ -31,5 +32,7 @@ dataloader_workers:    4
 save_steps:            500
 logging_steps:         10
 bf16:                  true
+optim:                 "adamw_torch"
+gradient_checkpointing: false
 
-deepspeed: "configs/deepspeed_zero2.json"
+deepspeed: null

@@ -1,0 +1,33 @@
+# Model override: microsoft/Phi-3.5-mini-instruct
+#
+# Architecture vs paper (Llama3-8B):
+#   hidden_size:       3072  (vs 4096) → projector output dim auto-inferred
+#   intermediate_size: 8192  (vs 14336)
+#   num_layers:        32    (same as Llama3-8B)
+#   attention:         Full MHA (32 heads, no GQA)
+#   bf16 weights:      ~7.6 GB
+#   tokenizer:         Tiktoken (use_fast=True — already set in leo_mini.py)
+#   MLP structure:     gate_up_proj (fused) + down_proj
+#                      → down_proj exists with in=8192, out=3072
+#                      → apply_mmoe_to_model replaces down_proj as normal
+#
+# VRAM budget (single 48 GB GPU, 8-bit Adam):
+#   Stage 1: ~13 GB
+#   Stage 2: ~30 GB  ← 8-bit Adam mandatory
+#   Stage 3: ~15 GB
+#
+# Expected benchmark performance (Phi-3.5-Vision reference):
+#   SQA ~91, MMMU ~43, TextVQA ~72, POPE ~86 — comparable to paper's 8B results
+
+# base_model_path: HuggingFace model ID used in Stage 1.
+# Trainer auto-derives llm_path for Stage 2/3 from output_dir.
+base_model_path: "microsoft/Phi-3.5-mini-instruct"
+
+output_dir: "checkpoints/phi3_5_mini"
+
+per_device_batch_size: 2
+gradient_accumulation:  32    # effective batch = 64
+
+optim: "adamw_bnb_8bit"
+gradient_checkpointing: true
+deepspeed: null

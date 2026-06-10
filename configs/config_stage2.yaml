@@ -3,7 +3,10 @@
 # Data: EAGLE SFT dataset
 
 stage: 2
-llm_path: "checkpoints/stage1/checkpoint-last"
+# llm_path: trainer auto-derives this from output_dir/stage1/checkpoint-last
+# when a --model_config is supplied.  Set explicitly here only when running
+# without a model config (e.g. paper's 8B default on multi-GPU).
+llm_path: "meta-llama/Meta-Llama-3-8B-Instruct"
 
 eagle_data_path: ""
 eagle_sft_path:  "data/eagle/sft.json"
@@ -17,10 +20,13 @@ d_proj_cotr: 256
 lora_rank:   16
 num_special: 3
 
-# Optimisation
+# Optimisation — defaults tuned for a single 48 GB GPU.
+# Stage 2 trains the entire model; 8-bit Adam is mandatory for 3B+ to avoid
+# OOM on fp32 Adam optimizer states (~25 GB for a 3B LLM alone).
+# Override via configs/models/<model>.yaml.
 learning_rate:         2.0e-5
-per_device_batch_size: 8
-gradient_accumulation: 8
+per_device_batch_size: 2        # 8 → 2 (full fine-tune is memory-heavy)
+gradient_accumulation: 32       # 8 → 32 (effective batch = 64)
 num_epochs:            1
 warmup_ratio:          0.03
 max_grad_norm:         1.0
@@ -31,5 +37,9 @@ dataloader_workers:    4
 save_steps:            500
 logging_steps:         10
 bf16:                  true
+# adamw_bnb_8bit: bitsandbytes 8-bit Adam cuts optimizer state memory by ~4×.
+# Required for 3B/Phi. Safe to use for 1B (optional there).
+optim:                 "adamw_bnb_8bit"
+gradient_checkpointing: true    # mandatory for Stage 2 on 1 GPU
 
-deepspeed: "configs/deepspeed_zero2.json"
+deepspeed: null

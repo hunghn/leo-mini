@@ -7,14 +7,18 @@ torchvision==0.16.2
 torchaudio==2.1.2
 
 # ── HuggingFace ─────────────────────────────────────────────────────────────
-transformers==4.40.0
-accelerate==0.28.0
-peft==0.10.0
-datasets==2.18.0
-tokenizers>=0.15.0
+# transformers>=4.43.0 required for Phi-3.5-mini-instruct (Phi3ForCausalLM
+# was merged into transformers at 4.43; 4.40 will raise ImportError for Phi).
+transformers>=4.43.0
+# accelerate>=0.30.0 aligns with transformers>=4.43 and supports device_map="auto"
+# for quantised models without the extra DeepSpeed dependency.
+accelerate>=0.30.0
+peft>=0.10.0
+datasets>=2.18.0
+tokenizers>=0.19.0
 
-# ── Quantisation (4-bit, for Colab and memory-constrained servers) ──────────
-bitsandbytes==0.43.0
+# ── Quantisation (4-bit / 8-bit Adam, for Colab and memory-constrained runs) ─
+bitsandbytes>=0.43.0
 
 # ── Distributed training ─────────────────────────────────────────────────────
 deepspeed==0.14.0

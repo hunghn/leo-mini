@@ -1,0 +1,31 @@
+# Model override: meta-llama/Llama-3.2-3B-Instruct
+#
+# Architecture vs paper (Llama3-8B):
+#   hidden_size:       3072  (vs 4096) → projector output dim auto-inferred
+#   intermediate_size: 8192  (vs 14336)
+#   num_layers:        28    (vs 32)
+#   attention:         GQA, 8 KV heads
+#   bf16 weights:      ~6.4 GB
+#
+# VRAM budget (single 48 GB GPU, 8-bit Adam):
+#   Stage 1: ~12 GB
+#   Stage 2: ~27 GB  ← 8-bit Adam mandatory (standard Adam → ~46 GB OOM)
+#   Stage 3: ~14 GB
+#
+# MMoE-LLM LoRA dims identical to Phi-3.5-mini:
+#   down_proj in_features=8192, out_features=3072 → rank-16 LoRA shape unchanged
+
+# base_model_path: HuggingFace model ID used in Stage 1.
+# Trainer auto-derives llm_path for Stage 2/3 from output_dir.
+base_model_path: "meta-llama/Llama-3.2-3B-Instruct"
+
+output_dir: "checkpoints/llama3_2_3b"
+
+per_device_batch_size: 2
+gradient_accumulation:  32    # effective batch = 64
+
+# 8-bit Adam is mandatory for Stage 2 to avoid fp32 optimizer state OOM.
+# Safe to use for Stage 1 and 3 as well.
+optim: "adamw_bnb_8bit"
+gradient_checkpointing: true  # mandatory for Stage 2; harmless for others
+deepspeed: null

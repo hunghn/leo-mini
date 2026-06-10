@@ -1,0 +1,36 @@
+# Model override: meta-llama/Llama-3.2-1B-Instruct
+#
+# Architecture vs paper (Llama3-8B):
+#   hidden_size:       2048  (vs 4096) → projector output dim auto-inferred
+#   intermediate_size: 8192  (same)
+#   num_layers:        16    (vs 32)
+#   attention:         GQA, 8 KV heads
+#   bf16 weights:      ~2.5 GB
+#
+# VRAM budget (single 48 GB GPU):
+#   Stage 1: ~8 GB   ← very comfortable, large batch possible
+#   Stage 2: ~14 GB  ← standard Adam fits (no 8-bit Adam needed)
+#   Stage 3: ~8 GB   ← trivial
+#
+# Recommended use: fast iteration / pipeline debugging.
+# For best benchmark results use llama3_2_3b or phi3_5_mini.
+
+# base_model_path: HuggingFace model ID used in Stage 1.
+# Trainer auto-derives llm_path for Stage 2/3 from output_dir.
+# Do NOT rename to llm_path — that would override stage checkpoint paths.
+base_model_path: "meta-llama/Llama-3.2-1B-Instruct"
+
+# Checkpoints for all 3 stages are written under this directory.
+# Each stage appends its own subfolder: output_dir/stage1/, /stage2/, /stage3/.
+# Keeping models separate avoids overwrite collisions when running 1B, 3B, Phi
+# on the same machine.
+output_dir: "checkpoints/llama3_2_1b"
+
+# Stage 1+3 can use larger batches because the model is small
+per_device_batch_size: 8
+gradient_accumulation:  8     # effective batch = 64
+
+# Standard Adam is fine — optimizer states fit easily
+optim: "adamw_torch"
+gradient_checkpointing: false
+deepspeed: null

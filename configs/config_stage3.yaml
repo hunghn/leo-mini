@@ -5,8 +5,13 @@
 # Loss:      Cross-entropy + L_balance (λ=0.05)
 
 stage: 3
-# Start from EAGLE Stage-2 checkpoint (or LLaVA-1.5-7B as baseline)
-llm_path: "checkpoints/stage2/checkpoint-last"
+# llm_path: trainer auto-derives this from output_dir/stage2/checkpoint-last
+# when a --model_config is supplied.  Set explicitly here only when running
+# without a model config (e.g. using NVEagle/Eagle-X4-8B-Plus directly).
+llm_path: "NVEagle/Eagle-X4-8B-Plus"
+# projector_path: trainer auto-derives from output_dir/stage2/projector_weights.pt
+# when a --model_config is supplied.  Set explicitly to override.
+projector_path: null
 
 eagle_data_path: ""
 eagle_sft_path:  ""
@@ -20,10 +25,12 @@ d_proj_cotr: 256       # common projection dim for CoTR attention
 lora_rank:   16        # LoRA rank for all expert adapters
 num_special: 3         # E=3 special LoRA experts
 
-# Optimisation
+# Optimisation — defaults tuned for a single 48 GB GPU.
+# Stage 3 freezes LLM + vision experts; only CoTR + MMoE-LLM adapters are
+# trained (~100–200 M params), so memory pressure is low.
 learning_rate:         2.0e-5
-per_device_batch_size: 8
-gradient_accumulation: 8
+per_device_batch_size: 4        # 8 → 4
+gradient_accumulation: 16       # 8 → 16 (effective batch = 64)
 num_epochs:            1
 warmup_ratio:          0.03
 max_grad_norm:         1.0
@@ -34,6 +41,8 @@ dataloader_workers:    4
 save_steps:            500
 logging_steps:         10
 bf16:                  true
-balance_loss_lambda:   0.05
+balance_loss_lambda:   0.05     # λ for L_balance (Eq. balance, paper Section 3.3)
+optim:                 "adamw_torch"
+gradient_checkpointing: false   # not needed — backbone is frozen
 
-deepspeed: "configs/deepspeed_zero2.json"
+deepspeed: null
