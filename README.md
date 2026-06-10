@@ -99,8 +99,8 @@ Repo này hỗ trợ ba LLM backbone thay thế cho cấu hình 1 GPU 48 GB:
 conda create -n leomini python=3.10 -y
 conda activate leomini
 
-# PyTorch 2.1 + CUDA 12.1
-pip install torch==2.1.2 torchvision==0.16.2 torchaudio==2.1.2 \
+# PyTorch 2.4+ + CUDA 12.1
+pip install torch torchvision torchaudio \
     --index-url https://download.pytorch.org/whl/cu121
 
 pip install -r requirements.txt
