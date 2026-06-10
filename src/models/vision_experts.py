@@ -120,8 +120,13 @@ class EVA02Expert(VisionExpert):
         return torch.stack(tensors)
 
     def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
-        # forward_features returns (B, 1+N, D) with CLS at index 0
-        features = self.visual.forward_features(pixel_values)
+        # open_clip wraps EVA-02 in TimmModel (has .trunk) in some versions,
+        # or EVAVisionTransformer (has .forward_features) in others.
+        if hasattr(self.visual, 'trunk'):
+            features = self.visual.trunk.forward_features(pixel_values)
+        else:
+            features = self.visual.forward_features(pixel_values)
+        # features: (B, 1+N, D) — CLS at index 0, patch tokens at 1:
         return features[:, 1:, :]  # (B, 576, 1024)
 
 

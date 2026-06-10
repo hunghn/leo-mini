@@ -99,11 +99,11 @@ Repo này hỗ trợ ba LLM backbone thay thế cho cấu hình 1 GPU 48 GB:
 conda create -n leomini python=3.10 -y
 conda activate leomini
 
-# PyTorch 2.5+ — chọn index URL khớp với CUDA driver của máy:
-#   CUDA 12.0.x → cu120  |  CUDA 12.1.x → cu121  |  CUDA 12.4.x → cu124
-# Kiểm tra driver: nvidia-smi | grep "CUDA Version"
-pip install torch torchvision torchaudio \
-    --index-url https://download.pytorch.org/whl/cu120
+# PyTorch 2.5.1 + CUDA 12.4 (pin version — PyTorch>=2.6 chỉ có cu130 yêu cầu driver mới hơn)
+# Kiểm tra CUDA version: nvidia-smi | grep "CUDA Version"
+# Thay cu124 → cu120/cu121 nếu driver của bạn chỉ hỗ trợ CUDA 12.0/12.1
+pip install "torch==2.5.1+cu124" "torchvision==0.20.1+cu124" "torchaudio==2.5.1+cu124" \
+    --index-url https://download.pytorch.org/whl/cu124
 
 pip install -r requirements.txt
 ```
@@ -334,7 +334,7 @@ Sau khi training, upload `checkpoints/stage3/stage3_adapter_weights.pt` lên Goo
 
 ```python
 # torch>=2.5 yêu cầu của transformers mới nhất; numpy<2 tránh xung đột NumPy 2.x
-!pip install "torch>=2.5" torchvision torchaudio --index-url https://download.pytorch.org/whl/cu120
+!pip install "torch==2.5.1+cu124" "torchvision==0.20.1+cu124" "torchaudio==2.5.1+cu124" --index-url https://download.pytorch.org/whl/cu124
 !pip install "numpy<2" transformers peft bitsandbytes accelerate timm open-clip-torch lmms-eval huggingface_hub[hf_xet]
 
 from google.colab import drive

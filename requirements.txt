@@ -2,16 +2,16 @@
 # Install: pip install -r requirements.txt
 
 # ── Core framework ──────────────────────────────────────────────────────────
-# Pin tới 2.5.x — bản cuối có cu120 build. cu130 yêu cầu driver mới hơn.
-# Install: pip install "torch==2.5.1+cu120" "torchvision==0.20.1+cu120" "torchaudio==2.5.1+cu120" --index-url https://download.pytorch.org/whl/cu120
+# PyTorch 2.5.1+cu124 — hoạt động với CUDA 12.4 driver.
+# Install: pip install "torch==2.5.1+cu124" "torchvision==0.20.1+cu124" "torchaudio==2.5.1+cu124" --index-url https://download.pytorch.org/whl/cu124
 torch>=2.5.0,<2.6.0
 torchvision>=0.20.0,<0.21.0
 torchaudio>=2.5.0,<2.6.0
 
 # ── HuggingFace ─────────────────────────────────────────────────────────────
-# transformers>=4.43.0 required for Phi-3.5-mini-instruct (Phi3ForCausalLM
-# was merged into transformers at 4.43; 4.40 will raise ImportError for Phi).
-transformers>=4.43.0
+# transformers>=4.43.0 required for Phi-3.5-mini-instruct (Phi3ForCausalLM).
+# Pin <4.48 để tránh yêu cầu torch.float8_e8m0fnu (chỉ có từ PyTorch>=2.6).
+transformers>=4.43.0,<4.48.0
 # accelerate>=0.30.0 aligns with transformers>=4.43 and supports device_map="auto"
 # for quantised models without the extra DeepSpeed dependency.
 accelerate>=0.30.0
@@ -23,7 +23,9 @@ tokenizers>=0.19.0
 bitsandbytes>=0.43.0
 
 # ── Distributed training ─────────────────────────────────────────────────────
-deepspeed==0.14.0
+# DeepSpeed chỉ cần cho multi-GPU (paper 8×A6000). Single-GPU: bỏ qua.
+# Nếu cần: pip install "deepspeed>=0.16.0"  (0.14 incompatible với PyTorch>=2.5)
+# deepspeed>=0.16.0
 
 # ── Vision models ───────────────────────────────────────────────────────────
 timm==0.9.16
