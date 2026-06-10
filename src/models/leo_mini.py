@@ -109,6 +109,7 @@ class LeoMini(nn.Module):
           Stage 2: all modules
           Stage 3: projector + cotr + mmoe_llm (down_proj LoRAs + routers)
         """
+        self.stage = stage
         # Freeze everything first
         for p in self.parameters():
             p.requires_grad_(False)

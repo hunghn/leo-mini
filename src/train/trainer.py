@@ -121,6 +121,35 @@ class LeoMiniTrainer(Trainer):
         loss = outputs.loss
         return (loss, outputs) if return_outputs else loss
 
+    def save_model(self, output_dir=None, _internal_call=False):
+        """
+        Override HF Trainer's save_model to handle tied weights.
+
+        Most LLMs tie embed_tokens.weight == lm_head.weight (same storage).
+        safetensors.save_file() raises RuntimeError on duplicate data_ptrs.
+        We clone the duplicate tensor to break the tie before saving.
+
+        The saved model.safetensors contains the full LeoMini state dict and
+        is loadable by _load_from_checkpoint for resume via load_state_dict.
+        """
+        if output_dir is None:
+            output_dir = self.args.output_dir
+        os.makedirs(output_dir, exist_ok=True)
+
+        state_dict = self.model.state_dict()
+
+        # Detect and break any shared-memory ties (embed_tokens / lm_head, etc.)
+        seen: dict[int, str] = {}
+        for key in list(state_dict):
+            ptr = state_dict[key].data_ptr()
+            if ptr in seen:
+                state_dict[key] = state_dict[key].clone()
+            else:
+                seen[ptr] = key
+
+        import safetensors.torch as sf
+        sf.save_file(state_dict, os.path.join(output_dir, "model.safetensors"))
+
 
 # ---------------------------------------------------------------------------
 # Main training function
