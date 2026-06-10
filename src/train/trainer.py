@@ -256,7 +256,7 @@ def train(args: LeoMiniTrainingArgs) -> None:
         args=training_args,
         train_dataset=train_dataset,
         data_collator=collator,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
     )
 
     # --- Resume if checkpoint exists ---
@@ -265,6 +265,23 @@ def train(args: LeoMiniTrainingArgs) -> None:
         last_ckpt = args.resume_from
     elif os.path.isdir(training_args.output_dir):
         last_ckpt = get_last_checkpoint(training_args.output_dir)
+
+    # Validate that the checkpoint directory actually contains loadable weights.
+    # A directory can exist (from a previously crashed run where save failed)
+    # without any model weights — HF Trainer would raise ValueError in that case.
+    if last_ckpt is not None:
+        _valid_weight_files = (
+            "model.safetensors",
+            "pytorch_model.bin",
+            "model.safetensors.index.json",
+            "pytorch_model.bin.index.json",
+        )
+        if not any(os.path.isfile(os.path.join(last_ckpt, f)) for f in _valid_weight_files):
+            print(
+                f"[Resume] Checkpoint at {last_ckpt} has no model weights "
+                f"(likely from a crashed save). Starting from scratch."
+            )
+            last_ckpt = None
 
     trainer.train(resume_from_checkpoint=last_ckpt)
 
