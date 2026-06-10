@@ -143,7 +143,7 @@ class ConvNeXtExpert(VisionExpert):
     def __init__(
         self,
         model_name: str = "convnext_large_d",
-        pretrained: str = "laion2b_s29b_b131k_ft_soup",
+        pretrained: str = "laion2b_s26b_b102k_augreg",
         target_tokens: int = STANDARD_N_TOKENS,
     ) -> None:
         super().__init__()

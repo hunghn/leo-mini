@@ -9,9 +9,9 @@ stage: 2
 llm_path: "meta-llama/Meta-Llama-3-8B-Instruct"
 
 eagle_data_path: ""
-eagle_sft_path:  "data/eagle/sft.json"
+eagle_sft_path:  "data/eagle_sft/llava_v1_5_mix665k.json"
 llava_data_path: ""
-image_dir:       "data/images"
+image_dir:       "data/eagle_sft/images"
 output_dir:      "checkpoints"
 
 # Architecture

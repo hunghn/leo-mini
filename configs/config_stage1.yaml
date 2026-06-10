@@ -5,10 +5,10 @@
 stage: 1
 llm_path: "meta-llama/Meta-Llama-3-8B-Instruct"
 
-eagle_data_path: "data/eagle/alignment.json"
+eagle_data_path: "data/eagle/blip_laion_cc_sbu_558k.json"
 eagle_sft_path:  ""
 llava_data_path: ""
-image_dir:       "data/images"
+image_dir:       "data/eagle/images"
 output_dir:      "checkpoints"
 
 # Architecture
