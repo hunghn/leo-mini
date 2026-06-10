@@ -99,12 +99,31 @@ Repo này hỗ trợ ba LLM backbone thay thế cho cấu hình 1 GPU 48 GB:
 conda create -n leomini python=3.10 -y
 conda activate leomini
 
-# PyTorch 2.4+ + CUDA 12.1
+# PyTorch 2.5+ — chọn index URL khớp với CUDA driver của máy:
+#   CUDA 12.0.x → cu120  |  CUDA 12.1.x → cu121  |  CUDA 12.4.x → cu124
+# Kiểm tra driver: nvidia-smi | grep "CUDA Version"
 pip install torch torchvision torchaudio \
-    --index-url https://download.pytorch.org/whl/cu121
+    --index-url https://download.pytorch.org/whl/cu120
 
 pip install -r requirements.txt
 ```
+
+> **Lưu ý NumPy**: `requirements.txt` pin `numpy<2.0` vì PyTorch 2.x được compile với NumPy 1.x. Nếu gặp `_ARRAY_API not found`, chạy `pip install "numpy<2"`.
+
+### Xác thực Hugging Face
+
+Một số model (Meta Llama, EAGLE) là **gated repos** — cần accept license trước khi tải:
+
+```bash
+# Đăng nhập một lần, token lưu vào ~/.cache/huggingface/token
+hf login
+```
+
+Sau đó vào trang model trên HuggingFace và nhấn **"Agree and access repository"**:
+- Llama-3.2: https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct
+- Llama-3-8B: https://huggingface.co/meta-llama/Meta-Llama-3-8B-Instruct
+
+Meta Llama được approve **ngay lập tức** sau khi accept terms.
 
 ### Tải pretrained weights
 
@@ -115,15 +134,39 @@ hf download meta-llama/Llama-3.2-3B-Instruct   # 3B (cân bằng)
 hf download microsoft/Phi-3.5-mini-instruct     # Phi (hiệu năng tốt)
 hf download meta-llama/Meta-Llama-3-8B-Instruct # 8B (paper gốc)
 
-# Vision experts (tất cả các variant đều dùng chung)
+# Vision experts
 hf download openai/clip-vit-large-patch14-336
 hf download google/pix2struct-large
-# EVA-02 CLIP-L-14-336: tải tự động qua open_clip khi khởi tạo (QuanSun/EVA-CLIP)
-# ConvNeXt-Large-D: tải tự động qua open_clip khi khởi tạo
+# EVA-02 CLIP-L-14-336: tải tự động qua open_clip khi khởi tạo (nguồn: QuanSun/EVA-CLIP)
+# ConvNeXt-Large-D:     tải tự động qua open_clip khi khởi tạo
 
-# EAGLE Stage-2 checkpoint (dùng làm điểm khởi đầu Stage 3, thay thế train Stage 1+2)
+# EAGLE Stage-2 checkpoint (shortcut: bỏ qua Stage 1+2, chỉ dùng với Llama3-8B)
 hf download NVEagle/Eagle-X4-8B-Plus
 ```
+
+### Tải training data
+
+```bash
+mkdir -p data/eagle data/eagle_sft
+
+# Stage 1 — LLaVA-Pretrain 558K (alignment, ~12 GB)
+hf download liuhaotian/LLaVA-Pretrain \
+    --repo-type dataset \
+    --local-dir data/eagle
+unzip data/eagle/images.zip -d data/eagle/images
+
+# Stage 2 — LLaVA-1.5 SFT 665K (chỉ JSON; ảnh tải riêng — xem bên dưới)
+# llava_v1_5_mix665k.json nằm trong repo LLaVA-Instruct-150K (không có repo riêng 665K)
+hf download liuhaotian/LLaVA-Instruct-150K \
+    --repo-type dataset \
+    --local-dir data/eagle_sft
+```
+
+> **Ảnh cho Stage 2** đến từ nhiều nguồn (COCO, GQA, OCR-VQA, TextVQA, VisualGenome).
+> Xem hướng dẫn đầy đủ tại [LLaVA Data Preparation](https://github.com/haotian-liu/LLaVA/blob/main/docs/Data.md).
+> Tất cả ảnh đặt vào `data/eagle_sft/images/`.
+>
+> **Flag `--repo-type dataset` là bắt buộc** — thiếu flag này `hf download` sẽ báo "repo not found".
 
 ---
 
@@ -290,7 +333,9 @@ Sau khi training, upload `checkpoints/stage3/stage3_adapter_weights.pt` lên Goo
 ### Cài đặt trên Colab
 
 ```python
-!pip install transformers peft bitsandbytes accelerate timm open-clip-torch lmms-eval huggingface_hub[hf_xet]
+# torch>=2.5 yêu cầu của transformers mới nhất; numpy<2 tránh xung đột NumPy 2.x
+!pip install "torch>=2.5" torchvision torchaudio --index-url https://download.pytorch.org/whl/cu120
+!pip install "numpy<2" transformers peft bitsandbytes accelerate timm open-clip-torch lmms-eval huggingface_hub[hf_xet]
 
 from google.colab import drive
 drive.mount('/content/drive')
