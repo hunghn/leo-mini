@@ -2,9 +2,11 @@
 # Install: pip install -r requirements.txt
 
 # ── Core framework ──────────────────────────────────────────────────────────
-torch>=2.5.0
-torchvision>=0.20.0
-torchaudio>=2.5.0
+# Pin tới 2.5.x — bản cuối có cu120 build. cu130 yêu cầu driver mới hơn.
+# Install: pip install "torch==2.5.1+cu120" "torchvision==0.20.1+cu120" "torchaudio==2.5.1+cu120" --index-url https://download.pytorch.org/whl/cu120
+torch>=2.5.0,<2.6.0
+torchvision>=0.20.0,<0.21.0
+torchaudio>=2.5.0,<2.6.0
 
 # ── HuggingFace ─────────────────────────────────────────────────────────────
 # transformers>=4.43.0 required for Phi-3.5-mini-instruct (Phi3ForCausalLM
