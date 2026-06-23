@@ -171,33 +171,48 @@ class VietnameseMultimodalDataset(Dataset):
         """
         from datasets import load_dataset
 
-        # The KTVIC and OpenViVQA datasets contain JSON files with a BOM (Byte
-        # Order Mark), which can cause parsing errors with the default `load_dataset`
-        # JSON loader. To handle this robustly, we load the data as a generic
-        # 'text' dataset, which reads the file content into a 'text' column. We
-        # then manually parse the JSON from this text content. This bypasses
-        # the encoding issues with the specialized JSON loader.
-        if "KTVIC" in hf_name or "OpenViVQA" in hf_name:
+        # OpenViVQA stores annotations as top-level JSON files rather than the
+        # shard name guessed by the generic fallback path. Resolve the exact
+        # file name first, then parse the JSON locally so BOM issues are handled
+        # consistently.
+        if "OpenViVQA" in hf_name:
             try:
                 import json
                 from huggingface_hub import hf_hub_download
                 from datasets import Dataset as HFDataset
 
-                # The file path inside the HF dataset repo is data/{split}-...
-                # We must first download the file from the hub to get its local cache path,
-                # then we can load it as a text file to bypass JSON parsing issues.
-                repo_file_path = os.path.join("data", f"{split}-00000-of-00001.json")
-                local_file_path = hf_hub_download(
-                    repo_id=hf_name,
-                    filename=repo_file_path,
-                    cache_dir=cache_dir,
-                )
-                ds = load_dataset("text", data_files={split: local_file_path}, cache_dir=cache_dir)
+                split_aliases = {
+                    "train": ["train", "training"],
+                    "validation": ["validation", "val", "dev"],
+                    "test": ["test", "testing"],
+                }
+                split_keys = split_aliases.get(split, [split])
+                filename_candidates = []
+                for key in split_keys:
+                    filename_candidates.extend([
+                        f"vlsp2023_{key}_data.json",
+                        f"{key}.json",
+                        os.path.join("data", f"{key}-00000-of-00001.json"),
+                    ])
 
-                # The dataset is a single file with a list of JSON objects
-                # The content is in the 'text' field of the first (and only) row.
-                file_content = ds[split][0]['text']
-                json_data = json.loads(file_content)
+                local_file_path = None
+                last_download_error = None
+                for repo_file_path in filename_candidates:
+                    try:
+                        local_file_path = hf_hub_download(
+                            repo_id=hf_name,
+                            filename=repo_file_path,
+                            cache_dir=cache_dir,
+                        )
+                        break
+                    except Exception as download_error:
+                        last_download_error = download_error
+
+                if local_file_path is None:
+                    raise last_download_error  # type: ignore[misc]
+
+                with open(local_file_path, encoding="utf-8-sig") as f:
+                    json_data = json.load(f)
                 return HFDataset.from_list(json_data)
             except Exception as e:
                 _raise_load_error(hf_name, split, e)
@@ -212,7 +227,6 @@ class VietnameseMultimodalDataset(Dataset):
             kwargs = dict(
                 split=split,
                 cache_dir=cache_dir or None,
-                encoding="utf-8-sig",
             )
             if download_mode is not None:
                 kwargs["download_mode"] = download_mode
