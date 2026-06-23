@@ -171,22 +171,26 @@ class VietnameseMultimodalDataset(Dataset):
         """
         from datasets import load_dataset
 
-        # The KTVIC dataset contains JSON files with a UTF-16 LE BOM, which can
-        # cause parsing errors with the default `load_dataset` JSON loader.
-        # To handle this robustly, we load the data as a generic 'text' dataset,
-        # which reads the file content into a 'text' column. We then manually
-        # parse the JSON from this text content. This bypasses the encoding
-        # issues with the specialized JSON loader.
-        if "KTVIC" in hf_name:
+        # The KTVIC and OpenViVQA datasets contain JSON files with a BOM (Byte
+        # Order Mark), which can cause parsing errors with the default `load_dataset`
+        # JSON loader. To handle this robustly, we load the data as a generic
+        # 'text' dataset, which reads the file content into a 'text' column. We
+        # then manually parse the JSON from this text content. This bypasses
+        # the encoding issues with the specialized JSON loader.
+        if "KTVIC" in hf_name or "OpenViVQA" in hf_name:
             try:
                 import json
-                ds = load_dataset("text", data_files={split: f"data/{split}-00000-of-00001.json"}, cache_dir=cache_dir, name=hf_name)
-                
-                def _json_decode(example):
-                    return json.loads(example["text"])
+                from datasets import Dataset as HFDataset
+
+                # The file path inside the HF dataset repo is data/{split}-...
+                # This is a common pattern but might need adjustment if a dataset changes structure.
+                data_file_path = os.path.join("data", f"{split}-00000-of-00001.json")
+                ds = load_dataset("text", data_files={split: data_file_path}, cache_dir=cache_dir, name=hf_name)
 
                 # The dataset is a single file with a list of JSON objects
-                json_data = json.loads(ds[split][0]['text'])
+                # The content is in the 'text' field of the first (and only) row.
+                file_content = ds[split][0]['text']
+                json_data = json.loads(file_content)
                 return HFDataset.from_list(json_data)
             except Exception as e:
                 _raise_load_error(hf_name, split, e)
