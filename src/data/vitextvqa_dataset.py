@@ -139,11 +139,39 @@ class ViTextVQADataset(Dataset):
 
         print(f"[ViTextVQA] Downloading split='{split}' from {hf_dataset_name} ...")
         try:
-            from datasets import load_dataset
+            from datasets import load_dataset, Image as HFImage
+            from datasets.exceptions import DatasetGenerationError
         except ImportError as e:
-            raise ImportError("pip install datasets") from e
+            raise ImportError("pip install 'datasets>=2.14'") from e
 
-        self._ds = load_dataset(hf_dataset_name, split=split, cache_dir=cache_dir)
+        try:
+            ds = load_dataset(
+                hf_dataset_name,
+                split=split,
+                cache_dir=cache_dir or None,
+                trust_remote_code=True,
+            )
+        except Exception as e:
+            # Unwrap DatasetGenerationError to show the real cause
+            cause = getattr(e, "__cause__", None) or getattr(e, "__context__", None)
+            cause_msg = f"\n  Root cause: {type(cause).__name__}: {cause}" if cause else ""
+            raise RuntimeError(
+                f"\n[ViTextVQA] Failed to load '{hf_dataset_name}' split='{split}'.{cause_msg}\n\n"
+                f"  Common fixes:\n"
+                f"  1. Clear stale cache:  rm -rf ~/.cache/huggingface/datasets/minhquan6203___vi_text_vqa/\n"
+                f"  2. Check disk space:   df -h ~/.cache\n"
+                f"  3. Re-install deps:    pip install --upgrade 'datasets>=2.14' Pillow\n"
+                f"  4. Manual cache dir:   set vi_cache_dir in model config\n"
+            ) from e
+
+        # Disable automatic PIL decode for the image column so that
+        # images arrive as raw bytes dicts {"bytes": ..., "path": ...}.
+        # We convert to PIL manually in __getitem__ via _to_pil(), which
+        # gives us control over error handling per sample.
+        if "image" in ds.column_names:
+            ds = ds.cast_column("image", HFImage(decode=False))
+
+        self._ds = ds
         print(f"[ViTextVQA] Loaded {len(self._ds):,} samples (split={split})")
 
     def __len__(self) -> int:
