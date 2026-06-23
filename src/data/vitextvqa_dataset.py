@@ -181,38 +181,27 @@ class VietnameseMultimodalDataset(Dataset):
                 from huggingface_hub import hf_hub_download
                 from datasets import Dataset as HFDataset
 
-                split_aliases = {
-                    "train": ["train", "training"],
-                    "validation": ["validation", "val", "dev"],
-                    "test": ["test", "testing"],
-                }
-                split_keys = split_aliases.get(split, [split])
-                filename_candidates = []
-                for key in split_keys:
-                    filename_candidates.extend([
-                        f"vlsp2023_{key}_data.json",
-                        f"{key}.json",
-                        os.path.join("data", f"{key}-00000-of-00001.json"),
-                    ])
+                # The OpenViVQA dataset uses a specific file naming convention, e.g.,
+                # 'vlsp2023_train_data.json'. The 'validation' split does not exist.
+                if split == "validation":
+                    print(f"[VietnameseDataset] Warning: '{split}' split not available for {hf_name}. Returning empty dataset.")
+                    return HFDataset.from_list([])
 
-                local_file_path = None
-                last_download_error = None
-                for repo_file_path in filename_candidates:
-                    try:
-                        local_file_path = hf_hub_download(
-                            repo_id=hf_name,
-                            filename=repo_file_path,
-                            cache_dir=cache_dir,
-                        )
-                        break
-                    except Exception as download_error:
-                        last_download_error = download_error
-
-                if local_file_path is None:
-                    raise last_download_error  # type: ignore[misc]
+                # The file is at the root of the repo, not in a 'data/' subdir.
+                repo_file_path = f"vlsp2023_{split}_data.json"
+                
+                local_file_path = hf_hub_download(
+                    repo_id=hf_name,
+                    filename=repo_file_path,
+                    cache_dir=cache_dir,
+                )
 
                 with open(local_file_path, encoding="utf-8-sig") as f:
                     json_data = json.load(f)
+                
+                # The JSON contains a top-level key (e.g., "train_data") which holds the list of items.
+                if isinstance(json_data, dict) and len(json_data) == 1:
+                    json_data = list(json_data.values())[0]
                 return HFDataset.from_list(json_data)
             except Exception as e:
                 _raise_load_error(hf_name, split, e)
