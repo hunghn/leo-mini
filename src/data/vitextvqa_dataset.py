@@ -11,6 +11,7 @@ from __future__ import annotations
 import io
 import os
 from typing import Any, Dict, List, Optional
+import zipfile
 
 import torch
 from PIL import Image
@@ -181,6 +182,7 @@ class VietnameseMultimodalDataset(Dataset):
                 from huggingface_hub import hf_hub_download
                 from datasets import Dataset as HFDataset
 
+                is_openvivqa = "OpenViVQA" in hf_name
                 if "KTVIC" in hf_name:
                     # KTVIC files are in a 'data/' subdirectory.
                     repo_file_path = f"data/{split}-00000-of-00001.json"
@@ -212,6 +214,48 @@ class VietnameseMultimodalDataset(Dataset):
                 # KTVIC JSON is a dict with a single key holding the list.
                 if "KTVIC" in hf_name and isinstance(json_data, dict):
                     json_data = list(json_data.values())[0]
+                elif is_openvivqa and isinstance(json_data, dict):
+                    images = json_data.get("images", {})
+                    annotations = json_data.get("annotations", {})
+                    if isinstance(annotations, dict):
+                        json_data = list(annotations.values())
+                    elif isinstance(annotations, list):
+                        json_data = annotations
+                    else:
+                        raise ValueError(
+                            "OpenViVQA annotations must be a dict or list, "
+                            f"got {type(annotations).__name__}"
+                        )
+
+                    zip_file_path = hf_hub_download(
+                        repo_id=hf_name,
+                        repo_type="dataset",
+                        filename=f"{openvivqa_split}-images.zip",
+                        cache_dir=cache_dir,
+                    )
+                    image_root = os.path.join(
+                        cache_dir or os.path.expanduser("~/.cache/huggingface/datasets"),
+                        "openvivqa_images",
+                        openvivqa_split,
+                    )
+                    os.makedirs(image_root, exist_ok=True)
+                    if not any(os.scandir(image_root)):
+                        with zipfile.ZipFile(zip_file_path) as zf:
+                            zf.extractall(image_root)
+
+                    image_paths = {}
+                    for root, _, filenames in os.walk(image_root):
+                        for filename in filenames:
+                            image_paths[filename] = os.path.join(root, filename)
+
+                    for row in json_data:
+                        image_id = str(row.get("image_id", ""))
+                        image_name = images.get(image_id, "")
+                        if image_name:
+                            row["image_name"] = image_name
+                            row["image"] = image_paths.get(
+                                image_name, os.path.join(image_root, image_name)
+                            )
 
                 return HFDataset.from_list(json_data)
             except Exception as e:
@@ -374,6 +418,8 @@ class VietnameseMultimodalDataset(Dataset):
             return image_obj.convert("RGB")
         if isinstance(image_obj, bytes):
             return Image.open(io.BytesIO(image_obj)).convert("RGB")
+        if isinstance(image_obj, str):
+            return Image.open(image_obj).convert("RGB")
         if isinstance(image_obj, dict):
             # datasets library stores images as {"bytes": b"...", "path": "..."}
             if "bytes" in image_obj and image_obj["bytes"]:
@@ -423,7 +469,7 @@ class OpenViVQADataset(VietnameseMultimodalDataset):
         img_field = sample.get("image")
         if hasattr(img_field, 'filename') and img_field.filename:
             return os.path.basename(img_field.filename)
-        return str(sample.get("question_id", idx))
+        return str(sample.get("image_name", sample.get("question_id", idx)))
 
 
 class ViTextVQADataset(VietnameseMultimodalDataset):
