@@ -285,11 +285,7 @@ class LeoMini(nn.Module):
             merged.append(seq)
 
         # Pad to same length if sequences differ (shouldn't happen with proper batching)
-        max_len = max(s.shape[0] for s in merged)
-        padded = torch.zeros(B, max_len, D, device=text_embeds.device, dtype=text_embeds.dtype)
-        for b, seq in enumerate(merged):
-            padded[b, :seq.shape[0]] = seq
-        return padded
+        return torch.nn.utils.rnn.pad_sequence(merged, batch_first=True, padding_value=0)
 
     def _merge_labels(
         self,
