@@ -185,12 +185,19 @@ class VietnameseMultimodalDataset(Dataset):
                     # KTVIC files are in a 'data/' subdirectory.
                     repo_file_path = f"data/{split}-00000-of-00001.json"
                 else: # OpenViVQA
-                    # OpenViVQA files are at the root.
-                    repo_file_path = f"OpenViVQA_{split}_data.json"
+                    # OpenViVQA annotation files are named with the VLSP 2023
+                    # split convention: vlsp2023_train/dev/test_data.json.
+                    openvivqa_split = {
+                        "validation": "dev",
+                        "valid": "dev",
+                        "val": "dev",
+                    }.get(split, split)
+                    repo_file_path = f"vlsp2023_{openvivqa_split}_data.json"
 
                 try:
                     local_file_path = hf_hub_download(
                         repo_id=hf_name,
+                        repo_type="dataset",
                         filename=repo_file_path,
                         cache_dir=cache_dir,
                     )
