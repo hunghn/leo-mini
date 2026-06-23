@@ -180,12 +180,19 @@ class VietnameseMultimodalDataset(Dataset):
         if "KTVIC" in hf_name or "OpenViVQA" in hf_name:
             try:
                 import json
+                from huggingface_hub import hf_hub_download
                 from datasets import Dataset as HFDataset
 
                 # The file path inside the HF dataset repo is data/{split}-...
-                # This is a common pattern but might need adjustment if a dataset changes structure.
-                data_file_path = os.path.join("data", f"{split}-00000-of-00001.json")
-                ds = load_dataset("text", data_files={split: data_file_path}, cache_dir=cache_dir, name=hf_name)
+                # We must first download the file from the hub to get its local cache path,
+                # then we can load it as a text file to bypass JSON parsing issues.
+                repo_file_path = os.path.join("data", f"{split}-00000-of-00001.json")
+                local_file_path = hf_hub_download(
+                    repo_id=hf_name,
+                    filename=repo_file_path,
+                    cache_dir=cache_dir,
+                )
+                ds = load_dataset("text", data_files={split: local_file_path}, cache_dir=cache_dir)
 
                 # The dataset is a single file with a list of JSON objects
                 # The content is in the 'text' field of the first (and only) row.
