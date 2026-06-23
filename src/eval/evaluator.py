@@ -332,7 +332,7 @@ def compare_models(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate LEO-MINI on vision-language benchmarks")
-    parser.add_argument("--model_path",    default=None,
+    parser.add_argument("--model_path",    required=True,
                         help="Single model checkpoint path (use --compare for multi-model)")
     parser.add_argument("--model_name",    default="",
                         help="Display name for the model (used in output)")
@@ -406,8 +406,6 @@ if __name__ == "__main__":
         run_token_ablation(args.model_path, args.output_dir, tasks=tasks)
 
     else:
-        if not args.model_path:
-            parser.error("--model_path required (or use --compare)")
         evaluator = LeoMiniEvaluator(
             model_path=args.model_path,
             model_name=args.model_name,

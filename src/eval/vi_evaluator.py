@@ -30,7 +30,7 @@ from transformers import CLIPImageProcessor, AutoProcessor
 
 from .metrics import compute_dataset_metrics
 from ..utils.logger import ViLeoMiniLogger, make_run_id
-from ..data.vitextvqa_dataset import ViTextVQADataset
+from ..data.vitextvqa_dataset import VietnameseMultimodalDataset
 from ..models.leo_mini import LeoMini, IMAGE_TOKEN, IMAGE_TOKEN_INDEX
 from ..models.vision_experts import Pix2StructExpert
 
@@ -131,7 +131,7 @@ class ViTextVQAEvaluator:
             if _has_pix2struct else None
         )
 
-        dataset = ViTextVQADataset(
+        dataset = VietnameseMultimodalDataset(
             split=split,
             tokenizer=tokenizer,
             image_processor=image_processor,

@@ -1,29 +1,10 @@
 """
-ViTextVQA Dataset — minhquan6203/ViTextVQA on HuggingFace.
+Vietnamese Multimodal Dataset Loader.
 
 Downloads the dataset automatically on first use via the `datasets` library.
 Converts each QA pair into Qwen2.5 chat format and returns the same dict
 schema as the existing MultimodalDataset so the collator and trainer work
 unchanged.
-
-HuggingFace dataset schema (minhquan6203/ViTextVQA):
-  image       — PIL.Image.Image
-  question    — str  (Vietnamese)
-  answers     — list[str]  (multiple annotator answers)
-  image_name  — str  (optional, for logging)
-
-Output per __getitem__:
-  {
-    "input_ids":         LongTensor (L,)
-    "labels":            LongTensor (L,)   -100 at prompt
-    "attention_mask":    LongTensor (L,)
-    "pixel_values":      FloatTensor (3, H, W)
-    "pix2struct_inputs": dict | None
-    # for evaluation only (not used during training):
-    "_question":         str
-    "_answers":          list[str]
-    "_image_name":       str
-  }
 """
 from __future__ import annotations
 
@@ -120,9 +101,9 @@ def _raise_load_error(hf_name: str, split: str, exc: Exception) -> None:
 # Main Dataset class
 # ---------------------------------------------------------------------------
 
-class ViTextVQADataset(Dataset):
+class VietnameseMultimodalDataset(Dataset):
     """
-    ViTextVQA dataset with automatic HuggingFace download.
+    Base class for Vietnamese multimodal datasets.
 
     Args:
         split:               "train" | "validation" | "test"
@@ -135,8 +116,6 @@ class ViTextVQADataset(Dataset):
         for_eval:            if True, also return _question/_answers/_image_name
     """
 
-    HF_DATASET = "minhquan6203/ViTextVQA"
-
     def __init__(
         self,
         split:                str,
@@ -144,7 +123,7 @@ class ViTextVQADataset(Dataset):
         image_processor:      CLIPImageProcessor,
         pix2struct_processor: Optional[Any]   = None,
         max_length:           int             = 2048,
-        hf_dataset_name:      str             = HF_DATASET,
+        hf_dataset_name:      str             = "minhquan6203/ViTextVQA",
         cache_dir:            Optional[str]   = None,
         for_eval:             bool            = False,
     ) -> None:
@@ -155,7 +134,7 @@ class ViTextVQADataset(Dataset):
         self.max_length           = max_length
         self.for_eval             = for_eval
 
-        print(f"[ViTextVQA] Downloading split='{split}' from {hf_dataset_name} ...")
+        print(f"[VietnameseDataset] Downloading split='{split}' from {hf_dataset_name} ...")
         try:
             from datasets import load_dataset, Image as HFImage, DownloadMode
         except ImportError as e:
@@ -172,7 +151,7 @@ class ViTextVQADataset(Dataset):
             ds = ds.cast_column("image", HFImage(decode=False))
 
         self._ds = ds
-        print(f"[ViTextVQA] Loaded {len(self._ds):,} samples (split={split})")
+        print(f"[VietnameseDataset] Loaded {len(self._ds):,} samples (split={split})")
 
     # ------------------------------------------------------------------
     # Robust dataset loading
@@ -223,7 +202,7 @@ class ViTextVQADataset(Dataset):
             if not _is_cache_corruption(e1):
                 _raise_load_error(hf_name, split, e1)
             print(
-                f"[ViTextVQA] Cache appears corrupted ({type(e1.__cause__ or e1).__name__}: "
+                f"[VietnameseDataset] Cache appears corrupted ({type(e1.__cause__ or e1).__name__}: "
                 f"{str(e1.__cause__ or e1)[:120]}). "
                 f"Retrying with force_redownload ..."
             )
@@ -235,7 +214,7 @@ class ViTextVQADataset(Dataset):
             if not _is_cache_corruption(e2):
                 _raise_load_error(hf_name, split, e2)
             print(
-                f"[ViTextVQA] force_redownload also failed. "
+                f"[VietnameseDataset] force_redownload also failed. "
                 f"Falling back to streaming mode (slower, no disk cache) ..."
             )
 
@@ -243,10 +222,10 @@ class ViTextVQADataset(Dataset):
         try:
             from datasets import Dataset as HFDataset
             iter_ds = _do_load(streaming=True)
-            print("[ViTextVQA] Streaming mode active — loading all samples into memory ...")
+            print("[VietnameseDataset] Streaming mode active — loading all samples into memory ...")
             rows = list(iter_ds)
             ds = HFDataset.from_list(rows)
-            print(f"[ViTextVQA] Materialised {len(ds):,} samples from stream.")
+            print(f"[VietnameseDataset] Materialised {len(ds):,} samples from stream.")
             return ds
         except Exception as e3:
             _raise_load_error(hf_name, split, e3)
@@ -257,10 +236,9 @@ class ViTextVQADataset(Dataset):
 
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         sample = self._ds[idx]
-        question   = sample.get("question", "")
+        question   = self._parse_question(sample)
         answers    = self._parse_answers(sample)
         image_obj  = sample.get("image")
-        image_name = sample.get("image_name", sample.get("img_name", str(idx)))
 
         # Use first answer for training (covers Stage 1/2/3)
         answer = answers[0] if answers else ""
@@ -311,7 +289,7 @@ class ViTextVQADataset(Dataset):
                     images=image, return_tensors="pt"
                 ).pixel_values[0]   # (3, H, W)
             except Exception as e:
-                print(f"[ViTextVQA] CLIP preprocess failed for idx={idx}: {e}")
+                print(f"[VietnameseDataset] CLIP preprocess failed for idx={idx}: {e}")
 
             if self.pix2struct_processor is not None:
                 try:
@@ -326,7 +304,7 @@ class ViTextVQADataset(Dataset):
                         "attention_mask":    p2s.attention_mask[0],
                     }
                 except Exception as e:
-                    print(f"[ViTextVQA] Pix2Struct preprocess failed for idx={idx}: {e}")
+                    print(f"[VietnameseDataset] Pix2Struct preprocess failed for idx={idx}: {e}")
 
         result: Dict[str, Any] = {
             "input_ids":      input_ids,
@@ -341,7 +319,7 @@ class ViTextVQADataset(Dataset):
         if self.for_eval:
             result["_question"]   = question
             result["_answers"]    = answers
-            result["_image_name"] = image_name
+            result["_image_name"] = self._parse_image_name(sample, idx)
             result["_image"]      = self._to_pil(image_obj) if image_obj is not None else None
 
         return result
@@ -349,26 +327,6 @@ class ViTextVQADataset(Dataset):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _parse_answers(sample: Dict[str, Any]) -> List[str]:
-        """
-        Robustly extract the list of GT answers from different field names.
-        minhquan6203/ViTextVQA may use 'answers', 'answer', or nested dicts.
-        """
-        raw = sample.get("answers", sample.get("answer", []))
-        if isinstance(raw, str):
-            return [raw]
-        if isinstance(raw, list):
-            out = []
-            for a in raw:
-                if isinstance(a, str):
-                    out.append(a)
-                elif isinstance(a, dict):
-                    # Some VQA datasets wrap answers as {"answer": "...", "answer_confidence": "..."}
-                    out.append(a.get("answer", ""))
-            return [a for a in out if a]
-        return []
 
     @staticmethod
     def _to_pil(image_obj: Any) -> Image.Image:
@@ -384,3 +342,58 @@ class ViTextVQADataset(Dataset):
             if "path" in image_obj and image_obj["path"]:
                 return Image.open(image_obj["path"]).convert("RGB")
         raise ValueError(f"Cannot convert image object of type {type(image_obj)} to PIL")
+
+    # --- Abstract methods for subclasses to implement ---
+
+    def _parse_question(self, sample: Dict[str, Any]) -> str:
+        raise NotImplementedError
+
+    def _parse_answers(self, sample: Dict[str, Any]) -> List[str]:
+        raise NotImplementedError
+
+    def _parse_image_name(self, sample: Dict[str, Any], idx: int) -> str:
+        raise NotImplementedError
+
+
+class KTVICDataset(VietnameseMultimodalDataset):
+    """Stage 1: Image Captioning (ai-enthusiasm-community/KTVIC)"""
+    def _parse_question(self, sample: Dict[str, Any]) -> str:
+        return "Mô tả hình ảnh này một cách chi tiết."
+
+    def _parse_answers(self, sample: Dict[str, Any]) -> List[str]:
+        captions = sample.get("captions", [])
+        return captions if isinstance(captions, list) else [str(captions)]
+
+    def _parse_image_name(self, sample: Dict[str, Any], idx: int) -> str:
+        img_field = sample.get("image")
+        if hasattr(img_field, 'filename') and img_field.filename:
+            return os.path.basename(img_field.filename)
+        return str(sample.get("id", idx))
+
+
+class OpenViVQADataset(VietnameseMultimodalDataset):
+    """Stage 2: General VQA (uit-nlp/OpenViVQA-dataset)"""
+    def _parse_question(self, sample: Dict[str, Any]) -> str:
+        return sample.get("question", "")
+
+    def _parse_answers(self, sample: Dict[str, Any]) -> List[str]:
+        answer = sample.get("answer", "")
+        return [answer] if isinstance(answer, str) else []
+
+    def _parse_image_name(self, sample: Dict[str, Any], idx: int) -> str:
+        img_field = sample.get("image")
+        if hasattr(img_field, 'filename') and img_field.filename:
+            return os.path.basename(img_field.filename)
+        return str(sample.get("question_id", idx))
+
+
+class ViTextVQADataset(VietnameseMultimodalDataset):
+    """Stage 3: Scene-Text VQA (minhquan6203/ViTextVQA)"""
+    def _parse_question(self, sample: Dict[str, Any]) -> str:
+        return sample.get("question", "")
+
+    def _parse_answers(self, sample: Dict[str, Any]) -> List[str]:
+        return sample.get("answers", [])
+
+    def _parse_image_name(self, sample: Dict[str, Any], idx: int) -> str:
+        return str(sample.get("image_name", idx))

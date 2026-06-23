@@ -93,9 +93,9 @@ Image (tiếng Việt có chữ) + Câu hỏi tiếng Việt
 
 | Stage | Trainable | Frozen | Data |
 |-------|-----------|--------|------|
-| 1 — Warmup Projector | Visual Projector | LLM, Vision Experts | EAGLE alignment / **ViTextVQA train** |
-| 2 — Full SFT | Tất cả | — | EAGLE SFT / **ViTextVQA train** |
-| 3 — Token Reduction | **CoTR + MMoE-LLM + Projector** | LLM backbone, Vision Experts | LLaVA-v1.5 665K / **ViTextVQA train** |
+| 1 — Warmup Projector | Visual Projector | LLM, Vision Experts | EAGLE alignment / **KTVIC** (captioning) |
+| 2 — Full SFT | Tất cả | — | EAGLE SFT / **OpenViVQA** (general VQA) |
+| 3 — Token Reduction | **CoTR + MMoE-LLM + Projector** | LLM backbone, Vision Experts | LLaVA-v1.5 665K / **ViTextVQA** (scene-text) |
 
 ---
 
@@ -196,12 +196,12 @@ hf download liuhaotian/LLaVA-Instruct-150K \
 
 #### Vi-LEO-MINI (ViTextVQA — tải tự động)
 
-ViTextVQA tải **tự động qua HuggingFace `datasets`** khi chạy training lần đầu. Không cần tải thủ công.
+Cả 3 bộ dữ liệu cho Vi-LEO-MINI (`KTVIC`, `OpenViVQA`, `ViTextVQA`) đều được tải **tự động qua HuggingFace `datasets`** khi chạy training lần đầu. Không cần tải thủ công.
 
 ```python
 # Tương đương với điều trainer thực hiện:
 from datasets import load_dataset
-ds = load_dataset("minhquan6203/ViTextVQA", split="train")
+ds = load_dataset("ai-enthusiasm-community/KTVIC", split="train")
 # Cache tự động tại ~/.cache/huggingface/datasets/
 ```
 
