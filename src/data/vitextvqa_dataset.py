@@ -172,29 +172,24 @@ class VietnameseMultimodalDataset(Dataset):
         """
         from datasets import load_dataset
 
-        # KTVIC and OpenViVQA have non-standard file structures and may contain
-        # a BOM (Byte Order Mark) in their JSON files, which can cause parsing
-        # errors. We handle them by downloading the specific JSON file and
-        # parsing it manually.
-        if "KTVIC" in hf_name or "OpenViVQA" in hf_name:
+        # OpenViVQA has a non-standard JSON structure with a BOM and separate
+        # image zips. Handle it manually. KTVIC is Parquet-backed on HF, so let
+        # datasets.load_dataset handle it via the standard path below.
+        if "OpenViVQA" in hf_name:
             try:
                 import json
                 from huggingface_hub import hf_hub_download
                 from datasets import Dataset as HFDataset
 
                 is_openvivqa = "OpenViVQA" in hf_name
-                if "KTVIC" in hf_name:
-                    # KTVIC files are in a 'data/' subdirectory.
-                    repo_file_path = f"data/{split}-00000-of-00001.json"
-                else: # OpenViVQA
-                    # OpenViVQA annotation files are named with the VLSP 2023
-                    # split convention: vlsp2023_train/dev/test_data.json.
-                    openvivqa_split = {
-                        "validation": "dev",
-                        "valid": "dev",
-                        "val": "dev",
-                    }.get(split, split)
-                    repo_file_path = f"vlsp2023_{openvivqa_split}_data.json"
+                # OpenViVQA annotation files are named with the VLSP 2023
+                # split convention: vlsp2023_train/dev/test_data.json.
+                openvivqa_split = {
+                    "validation": "dev",
+                    "valid": "dev",
+                    "val": "dev",
+                }.get(split, split)
+                repo_file_path = f"vlsp2023_{openvivqa_split}_data.json"
 
                 try:
                     local_file_path = hf_hub_download(
@@ -211,10 +206,7 @@ class VietnameseMultimodalDataset(Dataset):
                 with open(local_file_path, encoding="utf-8-sig") as f:
                     json_data = json.load(f)
 
-                # KTVIC JSON is a dict with a single key holding the list.
-                if "KTVIC" in hf_name and isinstance(json_data, dict):
-                    json_data = list(json_data.values())[0]
-                elif is_openvivqa and isinstance(json_data, dict):
+                if is_openvivqa and isinstance(json_data, dict):
                     images = json_data.get("images", {})
                     annotations = json_data.get("annotations", {})
                     if isinstance(annotations, dict):
@@ -446,14 +438,19 @@ class KTVICDataset(VietnameseMultimodalDataset):
         return "Mô tả hình ảnh này một cách chi tiết."
 
     def _parse_answers(self, sample: Dict[str, Any]) -> List[str]:
-        captions = sample.get("captions", [])
+        captions = (
+            sample.get("captions")
+            or sample.get("caption_vi")
+            or sample.get("segment_caption_vi")
+            or []
+        )
         return captions if isinstance(captions, list) else [str(captions)]
 
     def _parse_image_name(self, sample: Dict[str, Any], idx: int) -> str:
         img_field = sample.get("image")
         if hasattr(img_field, 'filename') and img_field.filename:
             return os.path.basename(img_field.filename)
-        return str(sample.get("id", idx))
+        return str(sample.get("image_uid", sample.get("id", idx)))
 
 
 class OpenViVQADataset(VietnameseMultimodalDataset):
