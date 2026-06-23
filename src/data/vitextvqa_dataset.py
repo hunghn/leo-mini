@@ -187,6 +187,7 @@ class VietnameseMultimodalDataset(Dataset):
             kwargs = dict(
                 split=split,
                 cache_dir=cache_dir or None,
+                encoding="utf-8-sig",
             )
             if download_mode is not None:
                 kwargs["download_mode"] = download_mode
