@@ -99,6 +99,24 @@ def _build_labels_qwen2(
 
 
 # ---------------------------------------------------------------------------
+# Load-error helper (module-level so _load_with_fallback can reference it)
+# ---------------------------------------------------------------------------
+
+def _raise_load_error(hf_name: str, split: str, exc: Exception) -> None:
+    cause = getattr(exc, "__cause__", None) or getattr(exc, "__context__", None)
+    cause_str = f"\n  Root cause: {type(cause).__name__}: {cause}" if cause else f"\n  Error: {exc}"
+    raise RuntimeError(
+        f"\n[ViTextVQA] All loading attempts failed for '{hf_name}' split='{split}'.{cause_str}\n\n"
+        f"  Manual fixes to try in order:\n"
+        f"  1. rm -rf ~/.cache/huggingface/datasets/minhquan6203*\n"
+        f"  2. pip install --upgrade 'datasets>=2.14' Pillow pandas pyarrow\n"
+        f"  3. df -h ~/.cache  (check disk space)\n"
+        f"  4. hf login  (if dataset requires auth)\n"
+        f"  5. Set vi_cache_dir to a different path in model config\n"
+    ) from exc
+
+
+# ---------------------------------------------------------------------------
 # Main Dataset class
 # ---------------------------------------------------------------------------
 
@@ -139,40 +157,100 @@ class ViTextVQADataset(Dataset):
 
         print(f"[ViTextVQA] Downloading split='{split}' from {hf_dataset_name} ...")
         try:
-            from datasets import load_dataset, Image as HFImage
-            from datasets.exceptions import DatasetGenerationError
+            from datasets import load_dataset, Image as HFImage, DownloadMode
         except ImportError as e:
             raise ImportError("pip install 'datasets>=2.14'") from e
 
-        try:
-            ds = load_dataset(
-                hf_dataset_name,
-                split=split,
-                cache_dir=cache_dir or None,
-                trust_remote_code=True,
-            )
-        except Exception as e:
-            # Unwrap DatasetGenerationError to show the real cause
-            cause = getattr(e, "__cause__", None) or getattr(e, "__context__", None)
-            cause_msg = f"\n  Root cause: {type(cause).__name__}: {cause}" if cause else ""
-            raise RuntimeError(
-                f"\n[ViTextVQA] Failed to load '{hf_dataset_name}' split='{split}'.{cause_msg}\n\n"
-                f"  Common fixes:\n"
-                f"  1. Clear stale cache:  rm -rf ~/.cache/huggingface/datasets/minhquan6203___vi_text_vqa/\n"
-                f"  2. Check disk space:   df -h ~/.cache\n"
-                f"  3. Re-install deps:    pip install --upgrade 'datasets>=2.14' Pillow\n"
-                f"  4. Manual cache dir:   set vi_cache_dir in model config\n"
-            ) from e
+        ds = self._load_with_fallback(
+            hf_dataset_name, split, cache_dir, HFImage, DownloadMode
+        )
 
-        # Disable automatic PIL decode for the image column so that
-        # images arrive as raw bytes dicts {"bytes": ..., "path": ...}.
-        # We convert to PIL manually in __getitem__ via _to_pil(), which
-        # gives us control over error handling per sample.
+        # Disable automatic PIL decode so images arrive as raw bytes dicts
+        # {"bytes": ..., "path": ...}. We decode in __getitem__ via _to_pil(),
+        # which gives per-sample error control and avoids bulk decode failures.
         if "image" in ds.column_names:
             ds = ds.cast_column("image", HFImage(decode=False))
 
         self._ds = ds
         print(f"[ViTextVQA] Loaded {len(self._ds):,} samples (split={split})")
+
+    # ------------------------------------------------------------------
+    # Robust dataset loading
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _load_with_fallback(hf_name, split, cache_dir, HFImage, DownloadMode):
+        """
+        Three-attempt loading strategy:
+
+        Pass 1 — use cached files (fast, normal path).
+        Pass 2 — if cache is corrupted (ValueError: Expected object or value,
+                  or any DatasetGenerationError), force a fresh download and
+                  regenerate the cache.
+        Pass 3 — if still failing, load as streaming and materialise to a list.
+                  Slower but bypasses the Parquet/Arrow cache layer entirely.
+        """
+        from datasets import load_dataset
+
+        _CACHE_CORRUPTION_HINTS = (
+            "Expected object or value",   # simplejson / pandas JSON parse
+            "ArrowInvalid",               # corrupted Arrow/Parquet file
+            "EOF",                        # truncated download
+            "Overflow",                   # corrupted numeric field
+        )
+
+        def _is_cache_corruption(exc: Exception) -> bool:
+            cause = getattr(exc, "__cause__", None) or getattr(exc, "__context__", None)
+            root  = str(cause or exc)
+            return any(hint in root for hint in _CACHE_CORRUPTION_HINTS)
+
+        def _do_load(download_mode=None, streaming=False):
+            kwargs = dict(
+                split=split,
+                cache_dir=cache_dir or None,
+                trust_remote_code=True,
+            )
+            if download_mode is not None:
+                kwargs["download_mode"] = download_mode
+            if streaming:
+                kwargs["streaming"] = True
+            return load_dataset(hf_name, **kwargs)
+
+        # Pass 1: normal cached load
+        try:
+            return _do_load()
+        except Exception as e1:
+            if not _is_cache_corruption(e1):
+                _raise_load_error(hf_name, split, e1)
+            print(
+                f"[ViTextVQA] Cache appears corrupted ({type(e1.__cause__ or e1).__name__}: "
+                f"{str(e1.__cause__ or e1)[:120]}). "
+                f"Retrying with force_redownload ..."
+            )
+
+        # Pass 2: force fresh download (clears bad cache entries)
+        try:
+            return _do_load(download_mode=DownloadMode.FORCE_REDOWNLOAD)
+        except Exception as e2:
+            if not _is_cache_corruption(e2):
+                _raise_load_error(hf_name, split, e2)
+            print(
+                f"[ViTextVQA] force_redownload also failed. "
+                f"Falling back to streaming mode (slower, no disk cache) ..."
+            )
+
+        # Pass 3: streaming → materialise to a regular dataset
+        try:
+            from datasets import Dataset as HFDataset
+            iter_ds = _do_load(streaming=True)
+            print("[ViTextVQA] Streaming mode active — loading all samples into memory ...")
+            rows = list(iter_ds)
+            ds = HFDataset.from_list(rows)
+            print(f"[ViTextVQA] Materialised {len(ds):,} samples from stream.")
+            return ds
+        except Exception as e3:
+            _raise_load_error(hf_name, split, e3)
+
 
     def __len__(self) -> int:
         return len(self._ds)
