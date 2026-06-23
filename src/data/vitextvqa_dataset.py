@@ -171,16 +171,30 @@ class VietnameseMultimodalDataset(Dataset):
         """
         from datasets import load_dataset
 
-        _CACHE_CORRUPTION_HINTS = (
-            "Expected object or value",   # simplejson / pandas JSON parse
-            "ArrowInvalid",               # corrupted Arrow/Parquet file
-            "EOF",                        # truncated download
-            "Overflow",                   # corrupted numeric field
-        )
+        # The KTVIC dataset contains JSON files with a UTF-16 LE BOM, which can
+        # cause parsing errors with the default `load_dataset` JSON loader.
+        # To handle this robustly, we load the data as a generic 'text' dataset,
+        # which reads the file content into a 'text' column. We then manually
+        # parse the JSON from this text content. This bypasses the encoding
+        # issues with the specialized JSON loader.
+        if "KTVIC" in hf_name:
+            try:
+                import json
+                ds = load_dataset("text", data_files={split: f"data/{split}-00000-of-00001.json"}, cache_dir=cache_dir, name=hf_name)
+                
+                def _json_decode(example):
+                    return json.loads(example["text"])
+
+                # The dataset is a single file with a list of JSON objects
+                json_data = json.loads(ds[split][0]['text'])
+                return HFDataset.from_list(json_data)
+            except Exception as e:
+                _raise_load_error(hf_name, split, e)
 
         def _is_cache_corruption(exc: Exception) -> bool:
             cause = getattr(exc, "__cause__", None) or getattr(exc, "__context__", None)
             root  = str(cause or exc)
+            _CACHE_CORRUPTION_HINTS = ("ArrowInvalid", "EOF", "Overflow", "Expected object or value")
             return any(hint in root for hint in _CACHE_CORRUPTION_HINTS)
 
         def _do_load(download_mode=None, streaming=False):
