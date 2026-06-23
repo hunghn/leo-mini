@@ -187,7 +187,6 @@ class VietnameseMultimodalDataset(Dataset):
             kwargs = dict(
                 split=split,
                 cache_dir=cache_dir or None,
-                trust_remote_code=True,
             )
             if download_mode is not None:
                 kwargs["download_mode"] = download_mode

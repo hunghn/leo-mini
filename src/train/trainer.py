@@ -257,7 +257,7 @@ def train(args: LeoMiniTrainingArgs) -> None:
             hf_dataset_name = "ai-enthusiasm-community/KTVIC"
         elif args.stage == 2:
             DatasetClass = OpenViVQADataset
-            hf_dataset_name = "uit-nlp/OpenViVQA"
+            hf_dataset_name = "uitnlp/OpenViVQA-dataset"
         else: # stage 3
             DatasetClass = ViTextVQADataset
             hf_dataset_name = "minhquan6203/ViTextVQA"

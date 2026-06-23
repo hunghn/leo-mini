@@ -295,6 +295,8 @@ def _cli() -> None:
     parser.add_argument("--n_visual",       type=int, default=128)
     parser.add_argument("--pix2struct_model_name", default="google/pix2struct-large")
     parser.add_argument("--hf_dataset",     default="minhquan6203/ViTextVQA")
+    # Note: The default hf_dataset is for Stage 3. For other stages, you must
+    # override this, e.g., --hf_dataset "uitnlp/OpenViVQA-dataset" for Stage 2.
     parser.add_argument("--cache_dir",      default=None)
     args = parser.parse_args()
 
