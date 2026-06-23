@@ -21,17 +21,10 @@ d_proj_cotr: 256
 lora_rank:   16
 num_special: 3
 
-# Vietnamese Datasets for 3-stage training
-# Stage 1: Alignment (Image-Captioning)
-vi_s1_hf_dataset: "ai-enthusiasm-community/KTVIC"
-vi_s1_train_path: "train"
-# Stage 2: General VQA (Instruction-following)
-vi_s2_hf_dataset: "uit-nlp/OpenViVQA-dataset"
-vi_s2_train_path: "train"
-# Stage 3: Target-specific VQA (Token Reduction)
-vi_s3_hf_dataset: "minhquan6203/ViTextVQA"
-vi_s3_train_path: "train"
-vi_s3_val_path:   "validation"
+# Vietnamese Datasets for 3-stage training. The trainer will automatically
+# select the correct HF dataset ID based on the stage.
+vi_train_path: "train"
+vi_val_path:   "validation"
 
 # Logging
 log_dir: "logs/qwen2_5_3b_vi"

@@ -70,7 +70,6 @@ class LeoMiniTrainingArgs:
     vi_train_path:  str = ""   # ViTextVQA HuggingFace split name ("train")
     vi_val_path:    str = ""   # ViTextVQA split for mid-training eval ("validation")
     vi_image_dir:   str = ""   # unused (images come from HF), kept for compatibility
-    vi_hf_dataset:  str = "minhquan6203/ViTextVQA"
     vi_cache_dir:   str = ""   # local HF cache dir (empty = HF default)
 
     # Vision expert subset — e.g. ["clip", "pix2struct"] for Vi-LEO-MINI.
@@ -252,20 +251,31 @@ def train(args: LeoMiniTrainingArgs) -> None:
     _use_vi = bool(args.vi_train_path)
 
     if _use_vi:
-        vi_split = args.vi_train_path  # e.g. "train"
-        train_dataset = ViTextVQADataset(
-            split=vi_split,
+        from ..data.vitextvqa_dataset import KTVICDataset, OpenViVQADataset, ViTextVQADataset
+        if args.stage == 1:
+            DatasetClass = KTVICDataset
+            hf_dataset_name = "ai-enthusiasm-community/KTVIC"
+        elif args.stage == 2:
+            DatasetClass = OpenViVQADataset
+            hf_dataset_name = "uit-nlp/OpenViVQA-dataset"
+        else: # stage 3
+            DatasetClass = ViTextVQADataset
+            hf_dataset_name = "minhquan6203/ViTextVQA"
+
+        train_split = args.vi_train_path  # e.g. "train"
+        train_dataset = DatasetClass(
+            split=train_split,
             tokenizer=tokenizer,
             image_processor=image_processor,
             pix2struct_processor=pix2struct_processor,
             max_length=args.max_length,
-            hf_dataset_name=args.vi_hf_dataset,
+            hf_dataset_name=hf_dataset_name,
             cache_dir=args.vi_cache_dir or None,
         )
         vi_logger.log_custom(
             type="dataset_info",
-            dataset="ViTextVQA",
-            split=vi_split,
+            dataset=DatasetClass.__name__,
+            split=train_split,
             n_samples=len(train_dataset),
         )
     else:
