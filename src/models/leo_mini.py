@@ -26,6 +26,7 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
@@ -71,6 +72,8 @@ class LeoMini(nn.Module):
         lora_rank:            int   = 16,
         num_special:          int   = 3,
         balance_loss_lambda:  float = 0.05,
+        memory_efficient_loss: bool = False,
+        loss_chunk_size:      int   = 1024,
     ) -> None:
         super().__init__()
         self.llm                 = llm
@@ -80,6 +83,8 @@ class LeoMini(nn.Module):
         self.cotr                = cotr
         self.n_visual            = n_visual
         self.balance_loss_lambda = balance_loss_lambda
+        self.memory_efficient_loss = memory_efficient_loss
+        self.loss_chunk_size     = loss_chunk_size
 
         # Context buffer shared by all MMoELinear layers
         self.ctx_buffer = ContextBuffer()
@@ -232,12 +237,20 @@ class LeoMini(nn.Module):
                 labels = self._merge_labels(labels, n_vis, input_ids)
 
         # 6. LLM forward
-        outputs = self.llm(
-            inputs_embeds=inputs_embeds,
-            attention_mask=attention_mask,
-            labels=labels,
-            return_dict=True,
-        )
+        if self.training and labels is not None and self.memory_efficient_loss:
+            outputs = self._llm_forward_memory_efficient_loss(
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                labels=labels,
+            )
+        else:
+            outputs = self.llm(
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                labels=labels,
+                return_dict=True,
+                use_cache=False if self.training else None,
+            )
 
         # 7. Add balanced loss in Stage 3
         if self.training and any(
@@ -255,6 +268,74 @@ class LeoMini(nn.Module):
 
         self.ctx_buffer.clear()
         return outputs
+
+    def _llm_forward_memory_efficient_loss(
+        self,
+        inputs_embeds: torch.Tensor,
+        attention_mask: Optional[torch.Tensor],
+        labels: torch.Tensor,
+    ) -> CausalLMOutputWithPast:
+        """
+        Compute CausalLM loss without materialising full (B, L, vocab) logits.
+        This is intended for Stage 2, where visual-token expansion makes Qwen2's
+        built-in loss allocation the dominant VRAM spike.
+        """
+        if not hasattr(self.llm, "model"):
+            raise AttributeError(
+                "memory_efficient_loss requires a HuggingFace CausalLM with a "
+                "'.model' decoder backbone"
+            )
+
+        decoder_outputs = self.llm.model(
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            use_cache=False,
+            return_dict=True,
+        )
+        hidden_states = decoder_outputs.last_hidden_state
+        loss = self._chunked_causal_lm_loss(hidden_states, labels)
+
+        return CausalLMOutputWithPast(
+            loss=loss,
+            logits=None,
+            past_key_values=None,
+            hidden_states=decoder_outputs.hidden_states,
+            attentions=decoder_outputs.attentions,
+        )
+
+    def _chunked_causal_lm_loss(
+        self,
+        hidden_states: torch.Tensor,
+        labels: torch.Tensor,
+    ) -> torch.Tensor:
+        """Apply lm_head in chunks and compute the shifted CE mean."""
+        shift_hidden = hidden_states[:, :-1, :].contiguous()
+        shift_labels = labels[:, 1:].contiguous()
+
+        flat_hidden = shift_hidden.view(-1, shift_hidden.shape[-1])
+        flat_labels = shift_labels.view(-1)
+
+        valid_count = (flat_labels != -100).sum()
+        if valid_count.item() == 0:
+            return flat_hidden.sum() * 0.0
+
+        chunk_size = max(1, int(self.loss_chunk_size))
+        total_loss = flat_hidden.new_zeros((), dtype=torch.float32)
+
+        for start in range(0, flat_hidden.shape[0], chunk_size):
+            end = min(start + chunk_size, flat_hidden.shape[0])
+            chunk_labels = flat_labels[start:end]
+            if torch.all(chunk_labels == -100):
+                continue
+            logits = self.llm.lm_head(flat_hidden[start:end])
+            total_loss = total_loss + F.cross_entropy(
+                logits.float(),
+                chunk_labels,
+                ignore_index=-100,
+                reduction="sum",
+            )
+
+        return total_loss / valid_count.to(total_loss.dtype)
 
     # ------------------------------------------------------------------
     # Helper: merge visual tokens into text embedding sequence
@@ -409,9 +490,12 @@ class LeoMini(nn.Module):
         lora_rank:             int                 = 16,
         num_special:           int                 = 3,
         balance_loss_lambda:   float               = 0.05,
+        memory_efficient_loss: bool                = False,
+        loss_chunk_size:       int                 = 1024,
         load_in_4bit:          bool                = False,
         vision_experts:        Optional[List[str]] = None,
         pix2struct_model_name: str                 = "google/pix2struct-large",
+        attn_implementation:   Optional[str]       = "sdpa",
         **kwargs,
     ) -> "LeoMini":
         """
@@ -437,6 +521,8 @@ class LeoMini(nn.Module):
             )
 
         print(f"Loading LLM from {llm_path} ...")
+        if attn_implementation:
+            kwargs.setdefault("attn_implementation", attn_implementation)
         llm = AutoModelForCausalLM.from_pretrained(
             llm_path,
             quantization_config=quant_config,
@@ -501,6 +587,8 @@ class LeoMini(nn.Module):
             lora_rank=lora_rank,
             num_special=num_special,
             balance_loss_lambda=balance_loss_lambda,
+            memory_efficient_loss=memory_efficient_loss,
+            loss_chunk_size=loss_chunk_size,
         )
 
         # Load stage-3 adapter weights if provided

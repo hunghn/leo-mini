@@ -29,9 +29,10 @@ vi_val_path:   "validation"
 # Logging
 log_dir: "logs/qwen2_5_3b_vi"
 
-# Hardware — Qwen2.5-3B ~27 GB in Stage 2; use 8-bit Adam + grad ckpt.
-per_device_batch_size: 4
-gradient_accumulation: 16
+# Hardware — Qwen2.5-3B Stage 2 is memory-bound on 1x48 GB.
+# Keep micro-batch size in the stage YAML; use accumulation here only to set
+# the effective batch target shared across stages.
+gradient_accumulation: 32
 gradient_checkpointing: true
 optim: "adamw_bnb_8bit"
 bf16:  true

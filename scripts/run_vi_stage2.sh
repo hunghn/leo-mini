@@ -10,11 +10,13 @@ set -euo pipefail
 
 MODEL_CONFIG="${1:-configs/models/qwen2_5_3b_vi.yaml}"
 NUM_GPUS="${NUM_GPUS:-1}"
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 echo "========================================================"
 echo "  Vi-LEO-MINI  |  Stage 2  |  Full SFT"
 echo "  Model config : ${MODEL_CONFIG}"
 echo "  GPUs         : ${NUM_GPUS}"
+echo "  CUDA alloc   : ${PYTORCH_CUDA_ALLOC_CONF}"
 echo "========================================================"
 
 if [ "${NUM_GPUS}" -gt 1 ]; then

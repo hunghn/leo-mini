@@ -108,6 +108,11 @@ class LeoMiniTrainingArgs:
     # Recompute activations during backward to trade compute for memory.
     # Required for Stage 2 with 3B+ models; optional elsewhere.
     gradient_checkpointing: bool  = False
+    # Stage 2 memory path: compute CE without materialising full
+    # (batch, seq_len, vocab) logits.
+    memory_efficient_loss:  bool  = False
+    loss_chunk_size:        int   = 1024
+    attn_implementation:    Optional[str] = "sdpa"
     deepspeed:              Optional[str] = None
     balance_loss_lambda:    float = 0.05
 
@@ -212,10 +217,15 @@ def train(args: LeoMiniTrainingArgs) -> None:
         lora_rank=args.lora_rank,
         num_special=args.num_special,
         balance_loss_lambda=args.balance_loss_lambda,
+        memory_efficient_loss=args.memory_efficient_loss,
+        loss_chunk_size=args.loss_chunk_size,
         vision_experts=args.vision_experts if args.vision_experts else None,
         pix2struct_model_name=args.pix2struct_model_name,
+        attn_implementation=args.attn_implementation,
     )
     model.set_stage(args.stage)
+    if args.gradient_checkpointing or args.memory_efficient_loss:
+        model.llm.config.use_cache = False
 
     n_params = sum(p.numel() for p in model.parameters())
     n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
