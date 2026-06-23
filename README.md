@@ -145,7 +145,7 @@ pip install -r requirements.txt
 
 ```bash
 # Đăng nhập một lần, token lưu vào ~/.cache/huggingface/token
-hf login
+hf auth login
 ```
 
 Một số model là **gated repos** — cần accept license tại trang model:
