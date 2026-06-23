@@ -185,7 +185,6 @@ class LeoMini(nn.Module):
         pixel_values:      Optional[torch.Tensor] = None,
         pix2struct_inputs: Optional[Dict] = None,
         labels:            Optional[torch.Tensor] = None,
-        return_loss:       bool = True,
     ) -> CausalLMOutputWithPast:
         """
         Multi-modal forward pass.
