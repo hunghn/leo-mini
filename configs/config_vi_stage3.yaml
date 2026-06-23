@@ -1,0 +1,48 @@
+# Vi-LEO-MINI — Stage 3: Token Reduction (CoTR + MMoE-LLM)
+# Trainable: CoTR + MMoE-LLM LoRA experts + Routers + Projector
+# Frozen:    LLM backbone, MMoE-Vision
+# Data:      ViTextVQA train split
+# Loss:      Cross-entropy + L_balance (λ=0.05)
+#
+# Core contribution: learns to reduce 576 visual tokens → 128 via CoTR
+# while routing through specialised LoRA experts in each LLM MLP block.
+
+stage: 3
+
+# llm_path auto-derived from output_dir/stage2/llm_checkpoint/ by trainer.
+llm_path: "Qwen/Qwen2.5-3B-Instruct"
+
+eagle_data_path: ""
+eagle_sft_path:  ""
+llava_data_path: ""
+image_dir:       ""
+output_dir:      "checkpoints"
+
+pix2struct_model_name: "google/pix2struct-large"
+
+# Architecture
+n_visual:    128
+d_proj_cotr: 256
+lora_rank:   16
+num_special: 3
+
+# Optimisation
+# Stage 3 trains only adapters — lower LR prevents overwriting Stage 2 alignment.
+learning_rate:         2.0e-5
+per_device_batch_size: 4
+gradient_accumulation: 16
+num_epochs:            1
+warmup_ratio:          0.03
+max_grad_norm:         1.0
+weight_decay:          0.0
+lr_scheduler_type:     "cosine"
+max_length:            512
+dataloader_workers:    4
+save_steps:            200
+logging_steps:         10
+bf16:                  true
+optim:                 "adamw_bnb_8bit"
+gradient_checkpointing: false    # CoTR + LoRA are light — not needed
+
+balance_loss_lambda: 0.05
+deepspeed: null

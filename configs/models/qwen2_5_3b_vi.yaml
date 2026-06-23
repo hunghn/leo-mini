@@ -1,0 +1,38 @@
+# Vi-LEO-MINI — Qwen2.5-3B-Instruct model config
+# Used for all 3 stages of Vietnamese TextVQA training.
+#
+# Do NOT add 'llm_path' here — the trainer auto-derives it from
+# output_dir/stageN-1/llm_checkpoint/ for stages 2 and 3.
+# Set 'llm_path' only to skip stages (see CLAUDE.md §6.3).
+
+base_model_path: "Qwen/Qwen2.5-3B-Instruct"
+output_dir:      "checkpoints/qwen2_5_3b_vi"
+
+# Vision experts — 2-expert subset for text-heavy Vietnamese images.
+# CLIP: general visual understanding.
+# Pix2Struct: OCR/document specialist (critical for ViTextVQA).
+vision_experts:
+  - clip
+  - pix2struct
+
+# Architecture
+n_visual:    128       # 128 tokens (vs 64 in paper) — more detail for text images
+d_proj_cotr: 256
+lora_rank:   16
+num_special: 3
+
+# ViTextVQA data (all stages use the same HF dataset)
+vi_hf_dataset: "minhquan6203/ViTextVQA"
+vi_train_path: "train"
+vi_val_path:   "validation"
+vi_cache_dir:  ""      # leave empty for HF default cache (~/.cache/huggingface)
+
+# Logging
+log_dir: "logs/qwen2_5_3b_vi"
+
+# Hardware — Qwen2.5-3B ~27 GB in Stage 2; use 8-bit Adam + grad ckpt.
+per_device_batch_size: 4
+gradient_accumulation: 16
+gradient_checkpointing: true
+optim: "adamw_bnb_8bit"
+bf16:  true

@@ -39,8 +39,10 @@ from transformers.trainer_utils import get_last_checkpoint
 
 from ..data.dataset import EAGLEDataset, LLaVADataset
 from ..data.collator import LeoMiniCollator
+from ..data.vitextvqa_dataset import ViTextVQADataset
 from ..models.leo_mini import LeoMini
 from ..models.vision_experts import Pix2StructExpert
+from ..utils.logger import ViLeoMiniLogger, LeoMiniLoggingCallback, make_run_id
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +63,22 @@ class LeoMiniTrainingArgs:
     # Required for Stage 3 so that trained projector weights are not discarded.
     projector_path:        Optional[str] = None
     pix2struct_model_name: str = "google/pix2struct-large"
+
+    # --- Vi-LEO-MINI paths (ViTextVQA variant) ---
+    # When vi_train_path is set, the trainer uses ViTextVQADataset instead of
+    # EAGLE/LLaVA for all three stages. Leave empty to use original datasets.
+    vi_train_path:  str = ""   # ViTextVQA HuggingFace split name ("train")
+    vi_val_path:    str = ""   # ViTextVQA split for mid-training eval ("validation")
+    vi_image_dir:   str = ""   # unused (images come from HF), kept for compatibility
+    vi_hf_dataset:  str = "minhquan6203/ViTextVQA"
+    vi_cache_dir:   str = ""   # local HF cache dir (empty = HF default)
+
+    # Vision expert subset — e.g. ["clip", "pix2struct"] for Vi-LEO-MINI.
+    # Empty list means use the original 4-expert set.
+    vision_experts: List[str] = field(default_factory=list)
+
+    # Log dir for structured JSON logs and plots
+    log_dir:        str = "logs"
 
     # --- Architecture ---
     n_visual:     int = 64
@@ -169,6 +187,23 @@ def train(args: LeoMiniTrainingArgs) -> None:
             f"Use --model_config (auto-derives the path) or set projector_path "
             f"explicitly in the stage YAML config."
         )
+    # ------------------------------------------------------------------
+    # Structured logger — one JSON file per run
+    # ------------------------------------------------------------------
+    run_id  = make_run_id(os.path.basename(args.llm_path), args.stage)
+    log_dir = args.log_dir or "logs"
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, f"{run_id}.json")
+
+    vi_logger = ViLeoMiniLogger(
+        log_path=log_path,
+        run_id=run_id,
+        config={k: str(v) for k, v in vars(args).items()},
+    )
+
+    # ------------------------------------------------------------------
+    # Build model
+    # ------------------------------------------------------------------
     model = LeoMini.from_pretrained(
         llm_path=args.llm_path,
         projector_path=args.projector_path,
@@ -178,8 +213,20 @@ def train(args: LeoMiniTrainingArgs) -> None:
         lora_rank=args.lora_rank,
         num_special=args.num_special,
         balance_loss_lambda=args.balance_loss_lambda,
+        vision_experts=args.vision_experts if args.vision_experts else None,
+        pix2struct_model_name=args.pix2struct_model_name,
     )
     model.set_stage(args.stage)
+
+    n_params = sum(p.numel() for p in model.parameters())
+    n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    vi_logger.log_model_info({
+        "total_params":     n_params,
+        "trainable_params": n_trainable,
+        "llm_path":         args.llm_path,
+        "vision_experts":   args.vision_experts or "all",
+        "n_visual":         args.n_visual,
+    })
 
     # --- Dataset ---
     tokenizer        = model.tokenizer
@@ -199,24 +246,53 @@ def train(args: LeoMiniTrainingArgs) -> None:
         max_length=args.max_length,
     )
 
-    if args.stage == 1:
-        data_path = args.eagle_data_path
-        DatasetClass = EAGLEDataset
-    elif args.stage == 2:
-        data_path = args.eagle_sft_path
-        DatasetClass = EAGLEDataset
-    else:  # Stage 3
-        data_path = args.llava_data_path
-        DatasetClass = LLaVADataset
+    # ------------------------------------------------------------------
+    # Dataset selection: ViTextVQA path (vi_train_path set) or original
+    # ------------------------------------------------------------------
+    _use_vi = bool(args.vi_train_path)
 
-    train_dataset = DatasetClass(
-        data_path=data_path,
-        image_dir=args.image_dir,
-        tokenizer=tokenizer,
-        image_processor=image_processor,
-        pix2struct_processor=pix2struct_processor,
-        max_length=args.max_length,
-    )
+    if _use_vi:
+        vi_split = args.vi_train_path  # e.g. "train"
+        train_dataset = ViTextVQADataset(
+            split=vi_split,
+            tokenizer=tokenizer,
+            image_processor=image_processor,
+            pix2struct_processor=pix2struct_processor,
+            max_length=args.max_length,
+            hf_dataset_name=args.vi_hf_dataset,
+            cache_dir=args.vi_cache_dir or None,
+        )
+        vi_logger.log_custom(
+            type="dataset_info",
+            dataset="ViTextVQA",
+            split=vi_split,
+            n_samples=len(train_dataset),
+        )
+    else:
+        if args.stage == 1:
+            data_path = args.eagle_data_path
+            DatasetClass = EAGLEDataset
+        elif args.stage == 2:
+            data_path = args.eagle_sft_path
+            DatasetClass = EAGLEDataset
+        else:
+            data_path = args.llava_data_path
+            DatasetClass = LLaVADataset
+
+        train_dataset = DatasetClass(
+            data_path=data_path,
+            image_dir=args.image_dir,
+            tokenizer=tokenizer,
+            image_processor=image_processor,
+            pix2struct_processor=pix2struct_processor,
+            max_length=args.max_length,
+        )
+        vi_logger.log_custom(
+            type="dataset_info",
+            dataset=DatasetClass.__name__,
+            data_path=data_path,
+            n_samples=len(train_dataset),
+        )
 
     # Enable gradient checkpointing on the LLM before wrapping with Trainer
     # so that HuggingFace's Trainer does not attempt to call the method itself
@@ -251,12 +327,15 @@ def train(args: LeoMiniTrainingArgs) -> None:
         deepspeed=args.deepspeed,
     )
 
+    logging_cb = LeoMiniLoggingCallback(logger=vi_logger, stage=args.stage)
+
     trainer = LeoMiniTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         data_collator=collator,
         processing_class=tokenizer,
+        callbacks=[logging_cb],
     )
 
     # --- Resume if checkpoint exists ---

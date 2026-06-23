@@ -401,17 +401,19 @@ class LeoMini(nn.Module):
     def from_pretrained(
         cls,
         llm_path:              str,
-        tokenizer_path:        Optional[str]  = None,
-        projector_path:        Optional[str]  = None,
-        cotr_path:             Optional[str]  = None,
-        stage3_weights:        Optional[str]  = None,
-        enable_stage3_modules: bool           = False,
-        n_visual:              int            = 64,
-        d_proj:                int            = 256,
-        lora_rank:             int            = 16,
-        num_special:           int            = 3,
-        balance_loss_lambda:   float          = 0.05,
-        load_in_4bit:          bool           = False,
+        tokenizer_path:        Optional[str]       = None,
+        projector_path:        Optional[str]       = None,
+        cotr_path:             Optional[str]       = None,
+        stage3_weights:        Optional[str]       = None,
+        enable_stage3_modules: bool                = False,
+        n_visual:              int                 = 64,
+        d_proj:                int                 = 256,
+        lora_rank:             int                 = 16,
+        num_special:           int                 = 3,
+        balance_loss_lambda:   float               = 0.05,
+        load_in_4bit:          bool                = False,
+        vision_experts:        Optional[List[str]] = None,
+        pix2struct_model_name: str                 = "google/pix2struct-large",
         **kwargs,
     ) -> "LeoMini":
         """
@@ -449,13 +451,19 @@ class LeoMini(nn.Module):
         tokenizer = AutoTokenizer.from_pretrained(tok_path, use_fast=True)
         # Ensure pad token exists — required for batched training.
         # Phi uses <|endoftext|> as eos; Llama uses <|eot_id|>.
-        # Both lack a dedicated pad token, so we reuse eos.
+        # Qwen2.5 uses <|im_end|> as eos (id=151645).
+        # All lack a dedicated pad token, so we reuse eos.
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
         tokenizer.padding_side = "right"
 
-        # Vision experts
-        vision = build_mmoe_vision()
+        # Vision experts — accepts an optional list of expert names so that
+        # variants (e.g. Vi-LEO-MINI with ["clip","pix2struct"]) skip loading
+        # unnecessary models and reduce VRAM usage.
+        vision = build_mmoe_vision(
+            experts=vision_experts,
+            pix2struct_model_name=pix2struct_model_name,
+        )
 
         # Projector: infer d_visual from expert dims
         d_visual = sum(vision.expert_dims)

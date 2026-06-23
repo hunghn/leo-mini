@@ -1,0 +1,48 @@
+# Vi-LEO-MINI — Stage 2: Full SFT on ViTextVQA
+# Trainable: all (LLM + MMoE-Vision + Projector)
+# Frozen:    —
+# Data:      ViTextVQA train split
+#
+# This stage fine-tunes the full model end-to-end on Vietnamese TextVQA.
+# Qwen2.5-3B requires adamw_bnb_8bit + gradient checkpointing for 1×48 GB GPU.
+
+stage: 2
+
+# llm_path auto-derived from output_dir/stage1/llm_checkpoint/ by trainer.
+# Set explicitly here only when running without --model_config (not recommended).
+llm_path: "Qwen/Qwen2.5-3B-Instruct"
+
+# Standard paths — unused (ViTextVQA paths come from model config)
+eagle_data_path: ""
+eagle_sft_path:  ""
+llava_data_path: ""
+image_dir:       ""
+output_dir:      "checkpoints"
+
+pix2struct_model_name: "google/pix2struct-large"
+
+# Architecture
+n_visual:    128
+d_proj_cotr: 256
+lora_rank:   16
+num_special: 3
+
+# Optimisation
+learning_rate:         2.0e-5
+per_device_batch_size: 2
+gradient_accumulation: 32
+num_epochs:            1
+warmup_ratio:          0.03
+max_grad_norm:         1.0
+weight_decay:          0.0
+lr_scheduler_type:     "cosine"
+max_length:            512
+dataloader_workers:    4
+save_steps:            200
+logging_steps:         10
+bf16:                  true
+optim:                 "adamw_bnb_8bit"
+gradient_checkpointing: true
+
+balance_loss_lambda: 0.05
+deepspeed: null

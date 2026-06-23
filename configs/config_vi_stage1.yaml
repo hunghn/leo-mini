@@ -1,0 +1,48 @@
+# Vi-LEO-MINI — Stage 1: Projector Warmup
+# Trainable: VisualProjector only
+# Frozen:    LLM, MMoE-Vision (CLIP + Pix2Struct)
+# Data:      ViTextVQA train split (same as Stage 2/3)
+#
+# Stage 1 uses ViTextVQA directly (no separate alignment corpus).
+# The projector learns to bridge d^V=3072 (CLIP+Pix2Struct) → d_LLM=2048.
+
+stage: 1
+
+# Placeholder — overridden by model config via base_model_path
+llm_path: "Qwen/Qwen2.5-3B-Instruct"
+
+# Standard paths left empty — ViTextVQA fields used instead
+eagle_data_path: ""
+eagle_sft_path:  ""
+llava_data_path: ""
+image_dir:       ""
+output_dir:      "checkpoints"
+
+pix2struct_model_name: "google/pix2struct-large"
+
+# Architecture — must match model config
+n_visual:    128
+d_proj_cotr: 256
+lora_rank:   16
+num_special: 3
+
+# Optimisation
+# Stage 1 only trains the projector (~few M params) — higher LR is fine.
+learning_rate:         1.0e-3
+per_device_batch_size: 4
+gradient_accumulation: 16
+num_epochs:            1
+warmup_ratio:          0.03
+max_grad_norm:         1.0
+weight_decay:          0.0
+lr_scheduler_type:     "cosine"
+max_length:            512      # short for Stage 1 warmup
+dataloader_workers:    4
+save_steps:            200
+logging_steps:         10
+bf16:                  true
+optim:                 "adamw_torch"
+gradient_checkpointing: false
+
+balance_loss_lambda: 0.05
+deepspeed: null

@@ -332,33 +332,61 @@ class MMoEVision(nn.Module):
 # Factory helper
 # ---------------------------------------------------------------------------
 
+# Canonical expert names used in config YAMLs and vision_experts list.
+EXPERT_NAMES = ("clip", "eva02", "convnext", "pix2struct")
+
+
 def build_mmoe_vision(
+    experts:              Optional[List[str]] = None,
+    pix2struct_model_name: str               = "google/pix2struct-large",
+    # Legacy bool flags kept for backward compatibility.
+    # Ignored when `experts` list is provided.
     use_clip:       bool = True,
     use_eva02:      bool = True,
     use_convnext:   bool = True,
     use_pix2struct: bool = True,
     use_sam:        bool = False,  # Vicuna-7B only
 ) -> MMoEVision:
-    """Build and return MMoEVision with the requested experts."""
-    experts: List[VisionExpert] = []
+    """
+    Build and return MMoEVision with the requested experts.
+
+    Args:
+        experts: Optional list of expert names, e.g. ["clip", "pix2struct"].
+            Supported values: "clip", "eva02", "convnext", "pix2struct".
+            When provided, overrides the individual use_* boolean flags.
+            When None, falls back to the bool flags (backward-compatible).
+        pix2struct_model_name: HuggingFace model ID for Pix2StructExpert.
+            Useful for pointing at a local cache instead of downloading.
+    """
+    # Resolve which experts to build
+    if experts is not None:
+        unknown = set(experts) - set(EXPERT_NAMES)
+        if unknown:
+            raise ValueError(f"Unknown vision experts: {unknown}. Valid: {EXPERT_NAMES}")
+        use_clip       = "clip"       in experts
+        use_eva02      = "eva02"      in experts
+        use_convnext   = "convnext"   in experts
+        use_pix2struct = "pix2struct" in experts
+
+    expert_list: List[VisionExpert] = []
 
     if use_clip:
         print("Loading CLIP ViT-L/14-336 ...")
-        experts.append(CLIPExpert())
+        expert_list.append(CLIPExpert())
 
     if use_eva02:
         print("Loading EVA-02 CLIP-L-14-336 ...")
-        experts.append(EVA02Expert())
+        expert_list.append(EVA02Expert())
 
     if use_convnext:
         print("Loading ConvNeXt-Large-D via open_clip ...")
-        experts.append(ConvNeXtExpert())
+        expert_list.append(ConvNeXtExpert())
 
     if use_pix2struct:
-        print("Loading Pix2Struct-Large ...")
-        experts.append(Pix2StructExpert())
+        print(f"Loading Pix2Struct-Large ({pix2struct_model_name}) ...")
+        expert_list.append(Pix2StructExpert(model_name=pix2struct_model_name))
 
     if use_sam:
         raise NotImplementedError("SAM expert is used only in Vicuna-7B variant.")
 
-    return MMoEVision(experts)
+    return MMoEVision(expert_list)
