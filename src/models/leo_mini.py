@@ -218,6 +218,9 @@ class LeoMini(nn.Module):
             inputs_embeds = text_embeds
             self.ctx_buffer.clear()
 
+        if self.training:
+            inputs_embeds.requires_grad_(True)
+
         # 5. Build attention mask and labels for merged sequence
         if pixel_values is not None:
             n_vis = vis_tokens.shape[1]
