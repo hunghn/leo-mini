@@ -171,37 +171,41 @@ class VietnameseMultimodalDataset(Dataset):
         """
         from datasets import load_dataset
 
-        # OpenViVQA stores annotations as top-level JSON files rather than the
-        # shard name guessed by the generic fallback path. Resolve the exact
-        # file name first, then parse the JSON locally so BOM issues are handled
-        # consistently.
-        if "OpenViVQA" in hf_name:
+        # KTVIC and OpenViVQA have non-standard file structures and may contain
+        # a BOM (Byte Order Mark) in their JSON files, which can cause parsing
+        # errors. We handle them by downloading the specific JSON file and
+        # parsing it manually.
+        if "KTVIC" in hf_name or "OpenViVQA" in hf_name:
             try:
                 import json
                 from huggingface_hub import hf_hub_download
                 from datasets import Dataset as HFDataset
 
-                # The OpenViVQA dataset uses a specific file naming convention, e.g.,
-                # 'vlsp2023_train_data.json'. The 'validation' split does not exist.
-                if split == "validation":
-                    print(f"[VietnameseDataset] Warning: '{split}' split not available for {hf_name}. Returning empty dataset.")
-                    return HFDataset.from_list([])
+                if "KTVIC" in hf_name:
+                    # KTVIC files are in a 'data/' subdirectory.
+                    repo_file_path = f"data/{split}-00000-of-00001.json"
+                else: # OpenViVQA
+                    # OpenViVQA files are at the root.
+                    repo_file_path = f"OpenViVQA_{split}_data.json"
 
-                # The file is at the root of the repo, not in a 'data/' subdir.
-                repo_file_path = f"vlsp2023_{split}_data.json"
-                
-                local_file_path = hf_hub_download(
-                    repo_id=hf_name,
-                    filename=repo_file_path,
-                    cache_dir=cache_dir,
-                )
+                try:
+                    local_file_path = hf_hub_download(
+                        repo_id=hf_name,
+                        filename=repo_file_path,
+                        cache_dir=cache_dir,
+                    )
+                except Exception as e:
+                    # If download fails (e.g., for a split that doesn't exist),
+                    # raise a controlled error.
+                    _raise_load_error(hf_name, split, e)
 
                 with open(local_file_path, encoding="utf-8-sig") as f:
                     json_data = json.load(f)
-                
-                # The JSON contains a top-level key (e.g., "train_data") which holds the list of items.
-                if isinstance(json_data, dict) and len(json_data) == 1:
+
+                # KTVIC JSON is a dict with a single key holding the list.
+                if "KTVIC" in hf_name and isinstance(json_data, dict):
                     json_data = list(json_data.values())[0]
+
                 return HFDataset.from_list(json_data)
             except Exception as e:
                 _raise_load_error(hf_name, split, e)
