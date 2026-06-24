@@ -172,6 +172,24 @@ class LeoMiniTrainer(Trainer):
         import safetensors.torch as sf
         sf.save_file(state_dict, os.path.join(output_dir, "model.safetensors"))
 
+    def _save_optimizer_and_scheduler(self, output_dir: str) -> None:
+        """Save optimizer/scheduler state; skip gracefully on disk-full errors.
+
+        Optimizer state is large (several GB) and not required for stage handoff —
+        we use our own llm_checkpoint/ + projector_weights.pt artifacts for that.
+        Catching write errors here prevents a crash at the very end of training
+        from discarding the completed model weights.
+        """
+        try:
+            super()._save_optimizer_and_scheduler(output_dir)
+        except (RuntimeError, OSError) as e:
+            print(
+                f"\n[LeoMiniTrainer] WARNING: Could not save optimizer/scheduler "
+                f"state to {output_dir}.\n"
+                f"  Cause: {e}\n"
+                f"  Model weights are intact. Optimizer state will reset on resume.\n"
+            )
+
 
 # ---------------------------------------------------------------------------
 # Main training function
@@ -333,7 +351,7 @@ def train(args: LeoMiniTrainingArgs) -> None:
         lr_scheduler_type=args.lr_scheduler_type,
         logging_steps=args.logging_steps,
         save_steps=args.save_steps,
-        save_total_limit=2,
+        save_total_limit=1,
         bf16=args.bf16,
         fp16=args.fp16,
         optim=args.optim,
@@ -382,7 +400,22 @@ def train(args: LeoMiniTrainingArgs) -> None:
             )
             last_ckpt = None
 
-    trainer.train(resume_from_checkpoint=last_ckpt)
+    _train_error: Optional[Exception] = None
+    try:
+        trainer.train(resume_from_checkpoint=last_ckpt)
+    except (RuntimeError, OSError) as e:
+        # Catch disk-full or write errors that occur during intermediate checkpoint
+        # saves at the very end of training.  The model weights are still in memory
+        # so we attempt the stage-handoff save below before re-raising.
+        _err_str = str(e)
+        if any(kw in _err_str for kw in ("file write failed", "unexpected pos", "No space left")):
+            print(
+                f"\n[LeoMiniTrainer] Checkpoint save failed (likely disk full): {e}\n"
+                f"  Training is complete. Attempting stage-handoff artifact save ...\n"
+            )
+            _train_error = e
+        else:
+            raise
 
     # --- Save checkpoint ---
     if args.stage == 3:
@@ -411,7 +444,10 @@ def train(args: LeoMiniTrainingArgs) -> None:
             os.path.join(training_args.output_dir, "projector_weights.pt")
         )
 
-    print("Training complete.")
+    if _train_error is not None:
+        print(f"[WARNING] Stage-handoff artifacts saved despite checkpoint write error: {_train_error}")
+    else:
+        print("Training complete.")
 
 
 # ---------------------------------------------------------------------------

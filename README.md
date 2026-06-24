@@ -279,13 +279,13 @@ gradient_checkpointing: true
 ### Chạy 3 stages
 
 ```bash
-# Stage 1 — Projector warmup trên ViTextVQA train
+# Stage 1 — Projector warmup trên KTVIC (image captioning)
 bash scripts/run_vi_stage1.sh configs/models/qwen2_5_3b_vi.yaml
 
-# Stage 2 — Full SFT trên ViTextVQA train (yêu cầu Stage 1 xong)
+# Stage 2 — Full SFT trên OpenViVQA (yêu cầu Stage 1 xong)
 bash scripts/run_vi_stage2.sh configs/models/qwen2_5_3b_vi.yaml
 
-# Stage 3 — CoTR + MMoE-LLM (yêu cầu Stage 2 xong)
+# Stage 3 — CoTR + MMoE-LLM trên ViTextVQA (yêu cầu Stage 2 xong)
 bash scripts/run_vi_stage3.sh configs/models/qwen2_5_3b_vi.yaml
 
 # Multi-GPU
@@ -310,16 +310,15 @@ d_proj_cotr: 256
 lora_rank:   16
 num_special: 3
 
-vi_hf_dataset: "minhquan6203/ViTextVQA"
 vi_train_path: "train"
 vi_val_path:   "validation"
 
 log_dir: "logs/qwen2_5_3b_vi"
 
-per_device_batch_size: 4
-gradient_accumulation: 16
-optim: "adamw_bnb_8bit"
+gradient_accumulation: 32
 gradient_checkpointing: true
+optim: "adamw_bnb_8bit"
+bf16: true
 ```
 
 ### Checkpoint structure sau khi train xong
@@ -407,7 +406,7 @@ CKPT_PHI="checkpoints/phi3_5_mini/stage3/stage3_adapter_weights.pt" \
 | **EM** | Exact Match (%) | `1` nếu dự đoán khớp chính xác với bất kỳ GT nào sau normalize |
 | **F1** | Token-level F1 (%) | Bag-of-words overlap, max over GT answers |
 
-> **Lưu ý**: Normalize tiếng Việt **giữ nguyên dấu thanh** (tone marks) vì chúng thay đổi nghĩa hoàn toàn (ma / má / mà / mả / mã / mạ). Chỉ lowercase + bỏ punctuation + collapse spaces.
+> **Lưu ý**: Normalize tiếng Việt **giữ nguyên dấu thanh** (tone marks) vì chúng thay đổi nghĩa hoàn toàn (ma / má / mà / mả / mã / mạ). Bước normalize: (1) NFC Unicode normalization trước tiên — tránh trường hợp NFD tách combining diacritical marks (U+0300–U+036F) bị regex `[^\w\s]` xóa mất dấu; (2) lowercase; (3) bỏ punctuation; (4) collapse spaces.
 
 ### Chạy evaluation
 
