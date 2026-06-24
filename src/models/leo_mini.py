@@ -239,6 +239,9 @@ class LeoMini(nn.Module):
                 labels = self._merge_labels(labels, n_vis, input_ids)
 
         # 6. LLM forward
+        llm_dtype = next(self.llm.parameters()).dtype
+        inputs_embeds = inputs_embeds.to(llm_dtype)
+
         if self.training and labels is not None and self.memory_efficient_loss:
             outputs = self._llm_forward_memory_efficient_loss(
                 inputs_embeds=inputs_embeds,
@@ -464,6 +467,9 @@ class LeoMini(nn.Module):
                 )
         else:
             inputs_embeds = text_embeds
+
+        llm_dtype = next(self.llm.parameters()).dtype
+        inputs_embeds = inputs_embeds.to(llm_dtype)
 
         out = self.llm.generate(
             inputs_embeds=inputs_embeds,
