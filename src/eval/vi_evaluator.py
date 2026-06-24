@@ -117,6 +117,7 @@ class ViTextVQAEvaluator:
         split:           str,
         hf_dataset_name: str           = "minhquan6203/ViTextVQA",
         cache_dir:       Optional[str] = None,
+        image_dir:       Optional[str] = None,
         limit:           Optional[int] = None,
         global_step:     int           = 0,
         pix2struct_model_name: str     = "google/pix2struct-large",
@@ -140,6 +141,7 @@ class ViTextVQAEvaluator:
             hf_dataset_name=hf_dataset_name,
             cache_dir=cache_dir,
             for_eval=True,
+            image_dir=image_dir,
         )
 
         if limit is not None:
@@ -295,6 +297,15 @@ def _cli() -> None:
     # Note: The default hf_dataset is for Stage 3. For other stages, you must
     # override this, e.g., --hf_dataset "uitnlp/OpenViVQA-dataset" for Stage 2.
     parser.add_argument("--cache_dir",      default=None)
+    parser.add_argument(
+        "--image_dir",
+        default=None,
+        help=(
+            "Local directory containing images by filename. Required when the HF "
+            "dataset does not embed image bytes (e.g. ViTextVQA images must be "
+            "downloaded separately from textvqa.org and placed here)."
+        ),
+    )
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -332,6 +343,7 @@ def _cli() -> None:
         split=args.split,
         hf_dataset_name=args.hf_dataset,
         cache_dir=args.cache_dir,
+        image_dir=args.image_dir or None,
         limit=args.limit,
     )
 

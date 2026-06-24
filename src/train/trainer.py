@@ -69,7 +69,8 @@ class LeoMiniTrainingArgs:
     # EAGLE/LLaVA for all three stages. Leave empty to use original datasets.
     vi_train_path:  str = ""   # ViTextVQA HuggingFace split name ("train")
     vi_val_path:    str = ""   # ViTextVQA split for mid-training eval ("validation")
-    vi_image_dir:   str = ""   # unused (images come from HF), kept for compatibility
+    vi_image_dir:   str = ""   # local dir of image files; required for ViTextVQA (Stage 3)
+                                # which does not embed image bytes in the HF dataset
     vi_cache_dir:   str = ""   # local HF cache dir (empty = HF default)
 
     # Vision expert subset — e.g. ["clip", "pix2struct"] for Vi-LEO-MINI.
@@ -299,6 +300,7 @@ def train(args: LeoMiniTrainingArgs) -> None:
             max_length=args.max_length,
             hf_dataset_name=hf_dataset_name,
             cache_dir=args.vi_cache_dir or None,
+            image_dir=args.vi_image_dir or None,
         )
         vi_logger.log_custom(
             type="dataset_info",

@@ -26,6 +26,13 @@ num_special: 3
 vi_train_path: "train"
 vi_val_path:   "validation"
 
+# Local image directory for ViTextVQA (Stage 3).
+# minhquan6203/ViTextVQA does NOT embed image bytes in the HF dataset.
+# Download TextVQA train images from textvqa.org and set this to the folder
+# containing *.jpg files (e.g. "/data/textvqa/train_images").
+# Leave empty ("") if the images are already embedded in the cached dataset.
+vi_image_dir: ""
+
 # Logging
 log_dir: "logs/qwen2_5_3b_vi"
 

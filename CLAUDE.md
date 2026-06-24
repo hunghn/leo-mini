@@ -497,6 +497,7 @@ results/vi_leomini/
 | B5 | KTVIC download path sai | Fix `hf_dataset_name` Stage 1 → `ai-enthusiasm-community/KTVIC` |
 | B6 | OpenViVQA download path sai | Fix `hf_dataset_name` Stage 2 → `uitnlp/OpenViVQA-dataset` |
 | B7 | OpenViVQA JSON parse fail | Custom `_load_with_fallback()` cho cấu trúc `{images, annotations}` + zip |
+| B8 | Stage 3 crash: `pixel_values` missing | `minhquan6203/ViTextVQA` không embed ảnh → cần `vi_image_dir` trỏ tới thư mục chứa ảnh TextVQA |
 | NB1 | Stage 1→2 mất projector | Auto-derive `projector_path` |
 | NB2 | `trainer.save_model()` không loadable | Dùng `model.llm.save_pretrained()` |
 | NB3 | Silent fallback khi missing ckpt | `sys.exit(1)` |

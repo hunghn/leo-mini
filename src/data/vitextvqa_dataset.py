@@ -115,6 +115,12 @@ class VietnameseMultimodalDataset(Dataset):
         hf_dataset_name:     HuggingFace dataset repo id
         cache_dir:           local cache for HF datasets
         for_eval:            if True, also return _question/_answers/_image_name
+        image_dir:           local directory containing images by name (used when
+                             the HF dataset does not embed image bytes, e.g.
+                             ViTextVQA whose images must be downloaded separately
+                             from TextVQA). When set, falls back to loading
+                             os.path.join(image_dir, image_name) when the
+                             dataset's "image" field is None.
     """
 
     def __init__(
@@ -127,6 +133,7 @@ class VietnameseMultimodalDataset(Dataset):
         hf_dataset_name:      str             = "minhquan6203/ViTextVQA",
         cache_dir:            Optional[str]   = None,
         for_eval:             bool            = False,
+        image_dir:            Optional[str]   = None,
     ) -> None:
         super().__init__()
         self.tokenizer            = tokenizer
@@ -134,6 +141,7 @@ class VietnameseMultimodalDataset(Dataset):
         self.pix2struct_processor = pix2struct_processor
         self.max_length           = max_length
         self.for_eval             = for_eval
+        self.image_dir            = image_dir
 
         print(f"[VietnameseDataset] Downloading split='{split}' from {hf_dataset_name} ...")
         try:
@@ -357,8 +365,31 @@ class VietnameseMultimodalDataset(Dataset):
         pixel_values    = None
         pix2struct_dict = None
 
+        # If the HF dataset does not embed image bytes (e.g. ViTextVQA stores
+        # only image_name and expects images in a local directory), fall back to
+        # loading from self.image_dir.
+        if image_obj is None and self.image_dir:
+            image_name = self._parse_image_name(sample, idx)
+            candidate = os.path.join(self.image_dir, image_name)
+            if os.path.isfile(candidate):
+                image_obj = candidate
+            else:
+                print(
+                    f"[VietnameseDataset] Image not found at '{candidate}' for idx={idx}. "
+                    f"image_dir='{self.image_dir}', image_name='{image_name}'."
+                )
+
         if image_obj is not None:
-            image = self._to_pil(image_obj)
+            try:
+                image = self._to_pil(image_obj)
+            except Exception as e:
+                raise ValueError(
+                    f"[VietnameseDataset] Cannot decode image for idx={idx} "
+                    f"(type={type(image_obj).__name__}): {e}\n"
+                    f"  If images are not embedded in the HF dataset, set "
+                    f"'vi_image_dir' in your config to a local images directory."
+                ) from e
+
             try:
                 pixel_values = self.image_processor(
                     images=image, return_tensors="pt"
@@ -380,6 +411,26 @@ class VietnameseMultimodalDataset(Dataset):
                     }
                 except Exception as e:
                     print(f"[VietnameseDataset] Pix2Struct preprocess failed for idx={idx}: {e}")
+
+        if pixel_values is None:
+            # Raise early with a diagnostic that names the root cause, rather
+            # than silently returning a dict without pixel_values and letting
+            # the collator raise a less-informative error.
+            if image_obj is None:
+                hint = (
+                    f"The dataset '{self.__class__.__name__}' returned no image "
+                    f"for idx={idx} (HF 'image' column is None/missing). "
+                )
+                if self.image_dir is None:
+                    hint += (
+                        "Set 'vi_image_dir' in your model config or trainer args "
+                        "to a directory containing the images (e.g. TextVQA train images)."
+                    )
+                else:
+                    hint += f"Image not found under image_dir='{self.image_dir}'."
+            else:
+                hint = f"CLIP preprocessing returned None for idx={idx} (image_obj type={type(image_obj).__name__})."
+            raise ValueError(f"[VietnameseDataset] Missing pixel_values: {hint}")
 
         result: Dict[str, Any] = {
             "input_ids":      input_ids,
