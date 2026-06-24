@@ -211,15 +211,15 @@ class MMoELinear(nn.Module):
         # f_GEN (always active)
         y = y + self.lora_gen(x)
 
-        # Router — uses visual/text context when available
-        if self.ctx.visual is not None and self.ctx.text is not None:
-            logits = self.router(x, self.ctx.visual, self.ctx.text)  # (B, seq_len, E)
-        else:
-            # Text-only fallback: use x itself for both visual and text context
-            logits = self.router(x, x, x)
+        # Router — uses visual/text context when available.
+        # Special experts are conditioned on visual context (paper §3.3).
+        # When no image is in the batch, skip top-1 expert entirely.
+        if self.ctx.visual is None or self.ctx.text is None:
+            return y  # f_ORI + f_GEN only (text-only path)
 
-        probs  = torch.softmax(logits, dim=-1)                       # (B, seq_len, E)
-        chosen = probs.argmax(dim=-1)                                 # (B, seq_len)
+        logits = self.router(x, self.ctx.visual, self.ctx.text)      # (B, seq_len, E)
+        probs  = torch.softmax(logits, dim=-1)                        # (B, seq_len, E)
+        chosen = probs.argmax(dim=-1)                                  # (B, seq_len)
 
         # Accumulate routing stats for balanced loss
         if self.training:
@@ -229,7 +229,6 @@ class MMoELinear(nn.Module):
                 self._total_tokens += chosen.numel()
 
         # Top-1 expert output: build a weighted sum (differentiable through probs)
-        # For each expert e: probs[..., e] * lora_experts[e](x)
         # Hard top-1 with straight-through: use one-hot * probs for routing
         one_hot = F.one_hot(chosen, self.num_special).to(x.dtype)    # (B, seq_len, E)
 
