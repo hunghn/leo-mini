@@ -82,6 +82,11 @@ class CoTR(nn.Module):
         """
         B = text_tokens.shape[0]
 
+        # Cast inputs to match module dtype (LLM embeds are bfloat16; CoTR may be float32)
+        target_dtype = self.proj_T.weight.dtype
+        text_tokens = text_tokens.to(target_dtype)
+        visual_tokens = [v.to(target_dtype) for v in visual_tokens]
+
         # --- Project all visual tokens and text to common d_proj space ---
         # I_bars[i]: (B, N_i, d_proj)
         I_bars: List[torch.Tensor] = [
