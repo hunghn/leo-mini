@@ -145,9 +145,8 @@ class ViTextVQAEvaluator:
         if limit is not None:
             dataset._ds = dataset._ds.select(range(min(limit, len(dataset._ds))))
 
-        predictions: List[str]       = []
+        predictions: List[str]         = []
         ground_truths: List[List[str]] = []
-        per_sample: List[Dict]        = []
 
         total = len(dataset)
         print(f"[Eval] Running inference on {total} samples (split={split}) ...")

@@ -12,6 +12,7 @@ completely without them (e.g. "ma" / "má" / "mà" / "mả" / "mã" / "mạ").
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Dict, List, Optional
 
 ANLS_THRESHOLD = 0.5  # standard TextVQA threshold
@@ -46,14 +47,15 @@ def _edit_distance(a: str, b: str) -> int:
 def normalize_vi(text: str) -> str:
     """
     Normalize Vietnamese answer text.
+    - NFC Unicode normalization FIRST (must be before regex to prevent combining
+      diacritical marks U+0300–U+036F from being stripped as non-word characters;
+      NFD "á" = a + combining-acute would lose its tone mark without this step)
     - Lowercase
     - Remove punctuation (keep letters, digits, spaces, Vietnamese chars)
     - Collapse whitespace
-    - Deliberately preserves Unicode tone marks (combining diacritics U+0300–U+036F
-      and Vietnamese precomposed chars U+1E00–U+1EFF).
     """
+    text = unicodedata.normalize("NFC", text)
     text = text.lower().strip()
-    # Keep word characters (\w), spaces, and Vietnamese-specific Unicode ranges
     text = re.sub(r"[^\w\s]", " ", text, flags=re.UNICODE)
     text = re.sub(r"\s+", " ", text).strip()
     return text
