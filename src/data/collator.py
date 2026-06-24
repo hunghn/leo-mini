@@ -66,10 +66,17 @@ class LeoMiniCollator:
         pv_list = [f.get("pixel_values") for f in features]
         if all(pv is not None for pv in pv_list):
             batch["pixel_values"] = torch.stack(pv_list)
-        elif any(pv is not None for pv in pv_list):
-            # Mixed batch: skip image samples or use per-sample loop
-            # For simplicity, only include batches where all samples have images
-            batch["pixel_values"] = None
+        else:
+            # At least one sample failed image preprocessing.  Dropping pixel_values
+            # for the whole batch would cause Stage 3 to skip CoTR and vision experts
+            # entirely, silently degrading training.  Raise instead so the failure
+            # is visible and the dataset/preprocessing bug can be fixed.
+            n_missing = sum(1 for pv in pv_list if pv is None)
+            raise ValueError(
+                f"[Collator] {n_missing}/{len(pv_list)} samples in this batch are missing "
+                f"pixel_values. Check image preprocessing in the dataset. "
+                f"Fix the image loading error rather than silently dropping visual input."
+            )
 
         # --- pix2struct_inputs: stack flattened_patches and attention_mask ---
         p2s_list = [f.get("pix2struct_inputs") for f in features]

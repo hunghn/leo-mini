@@ -1,8 +1,8 @@
 """
 Conditional Token Reduction (CoTR) — Section 3.2, Eq. 2–7.
 
-For each vision expert i, CoTR aggregates N_i visual tokens into N^V=64 consolidated
-tokens by attending jointly over:
+For each vision expert i, CoTR aggregates N_i visual tokens into N^V consolidated
+tokens (default 64; Vi-LEO-MINI uses 128) by attending jointly over:
   - a learnable query               (Eq. 2  — query-visual attention)
   - self-similarity within expert   (Eq. 3  — self-attention)
   - cross-expert global context     (Eq. 4  — cross-expert attention)

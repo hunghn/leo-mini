@@ -334,5 +334,8 @@ def collect_balance_loss(
             if reset:
                 module.reset_balance_stats()
     if total is None:
-        return torch.tensor(0.0)
+        # Return a zero tensor on the same device as the model parameters
+        # so it can be safely added to the CE loss without a device mismatch.
+        device = next(model.parameters()).device
+        return torch.tensor(0.0, device=device)
     return total

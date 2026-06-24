@@ -30,7 +30,7 @@ from transformers import CLIPImageProcessor, AutoProcessor
 
 from .metrics import compute_dataset_metrics
 from ..utils.logger import ViLeoMiniLogger, make_run_id
-from ..data.vitextvqa_dataset import VietnameseMultimodalDataset
+from ..data.vitextvqa_dataset import ViTextVQADataset
 from ..models.leo_mini import LeoMini, IMAGE_TOKEN, IMAGE_TOKEN_INDEX
 from ..models.vision_experts import Pix2StructExpert
 
@@ -131,7 +131,7 @@ class ViTextVQAEvaluator:
             if _has_pix2struct else None
         )
 
-        dataset = VietnameseMultimodalDataset(
+        dataset = ViTextVQADataset(
             split=split,
             tokenizer=tokenizer,
             image_processor=image_processor,
@@ -233,11 +233,9 @@ class ViTextVQAEvaluator:
             temperature=1.0,
         )
 
-        # out_ids includes the prompt — strip prompt tokens
-        prompt_len = input_ids.shape[1]
-        # adjust for visual token expansion in generate()
-        new_tokens = out_ids[0][max(0, out_ids.shape[1] - self.max_new_tokens):]
-        decoded = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+        # LeoMini.generate() calls self.llm.generate(inputs_embeds=...) internally,
+        # so out_ids contains ONLY the newly generated tokens (no prompt prefix).
+        decoded = tokenizer.decode(out_ids[0], skip_special_tokens=True).strip()
         return decoded
 
 

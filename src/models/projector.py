@@ -10,7 +10,7 @@ Architecture (from paper):
 The projector is:
   • Trained in Stage 1 (only trainable component)
   • Kept trainable in Stage 2
-  • Frozen in Stage 3 (loaded from EAGLE / Stage 2 checkpoint)
+  • Kept trainable in Stage 3 (paper Table 6; loaded from Stage 2 checkpoint then fine-tuned)
 """
 
 from typing import Optional
