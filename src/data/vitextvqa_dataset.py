@@ -156,8 +156,14 @@ class VietnameseMultimodalDataset(Dataset):
         # Disable automatic PIL decode so images arrive as raw bytes dicts
         # {"bytes": ..., "path": ...}. We decode in __getitem__ via _to_pil(),
         # which gives per-sample error control and avoids bulk decode failures.
+        # For our custom-loaded datasets (ViTextVQA), the "image" column may be a
+        # plain string path (Value("string")), which _to_pil() handles directly.
+        # We still attempt the cast but skip it on failure rather than crashing.
         if "image" in ds.column_names:
-            ds = ds.cast_column("image", HFImage(decode=False))
+            try:
+                ds = ds.cast_column("image", HFImage(decode=False))
+            except Exception:
+                pass  # string-path column: _to_pil(str) handles it in __getitem__
 
         self._ds = ds
         print(f"[VietnameseDataset] Loaded {len(self._ds):,} samples (split={split})")
@@ -179,6 +185,102 @@ class VietnameseMultimodalDataset(Dataset):
                   Slower but bypasses the Parquet/Arrow cache layer entirely.
         """
         from datasets import load_dataset
+
+        # ViTextVQA stores QA pairs in JSON files (ViTextVQA_{split}.json) and
+        # images in a separate ViTextVQA_images.zip.  The standard load_dataset
+        # path treats the top-level JSON dict as a single row, giving "1 sample".
+        # We must parse the JSON manually to extract individual QA rows.
+        if "ViTextVQA" in hf_name:
+            try:
+                import json as _json
+                from huggingface_hub import hf_hub_download
+                from datasets import Dataset as HFDataset
+
+                # HF repo uses "dev" for what we call "validation"
+                vt_split = {"validation": "dev", "valid": "dev", "val": "dev"}.get(split, split)
+                json_filename = f"ViTextVQA_{vt_split}.json"
+
+                local_json = hf_hub_download(
+                    repo_id=hf_name,
+                    repo_type="dataset",
+                    filename=json_filename,
+                    cache_dir=cache_dir,
+                )
+
+                with open(local_json, encoding="utf-8-sig") as f:
+                    raw = _json.load(f)
+
+                # Extract the list of QA items from whatever top-level wrapper exists.
+                if isinstance(raw, list):
+                    rows = raw
+                elif isinstance(raw, dict):
+                    # Try common wrapper keys used by TextVQA-style datasets
+                    rows = None
+                    for key in ("data", "questions", "annotations", "items", "samples"):
+                        if key in raw and isinstance(raw[key], list):
+                            rows = raw[key]
+                            break
+                    if rows is None:
+                        # Columnar format: {field: [v0, v1, ...], ...}
+                        list_cols = {k: v for k, v in raw.items() if isinstance(v, list)}
+                        lengths = {len(v) for v in list_cols.values()}
+                        if list_cols and len(lengths) == 1:
+                            n = next(iter(lengths))
+                            rows = [{k: v[i] for k, v in list_cols.items()} for i in range(n)]
+                        else:
+                            rows = [raw]  # last resort: 1 row = whole dict
+                else:
+                    rows = [raw]
+
+                # Try to download and extract the images zip (one-time setup).
+                # Each row gets an "image" field set to the local file path so
+                # _to_pil() can open it directly without needing vi_image_dir.
+                image_paths: dict = {}
+                try:
+                    zip_local = hf_hub_download(
+                        repo_id=hf_name,
+                        repo_type="dataset",
+                        filename="ViTextVQA_images.zip",
+                        cache_dir=cache_dir,
+                    )
+                    image_root = os.path.join(
+                        cache_dir or os.path.expanduser("~/.cache/huggingface/datasets"),
+                        "vitextvqa_images",
+                    )
+                    os.makedirs(image_root, exist_ok=True)
+                    if not any(os.scandir(image_root)):
+                        print("[ViTextVQA] Extracting ViTextVQA_images.zip (one-time) ...")
+                        with zipfile.ZipFile(zip_local) as zf:
+                            zf.extractall(image_root)
+                    for _root, _, _files in os.walk(image_root):
+                        for _fn in _files:
+                            if _fn.lower().endswith((".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp")):
+                                image_paths[_fn] = os.path.join(_root, _fn)
+                    print(f"[ViTextVQA] {len(image_paths):,} images available in {image_root}")
+                except Exception as _img_err:
+                    print(
+                        f"[ViTextVQA] Could not download ViTextVQA_images.zip: {_img_err}\n"
+                        f"  → Set vi_image_dir in your config to a local directory with the images."
+                    )
+
+                # Normalise each row: resolve image path and ensure image_name field.
+                for row in rows:
+                    img_ref = (
+                        row.get("image")
+                        or row.get("image_name")
+                        or row.get("image_id")
+                        or ""
+                    )
+                    image_filename = os.path.basename(str(img_ref)) if img_ref else ""
+                    row["image_name"] = image_filename
+                    if image_filename and image_filename in image_paths:
+                        row["image"] = image_paths[image_filename]   # resolved local path
+                    else:
+                        row["image"] = None   # will use image_dir fallback in __getitem__
+
+                return HFDataset.from_list(rows)
+            except Exception as e:
+                _raise_load_error(hf_name, split, e)
 
         # OpenViVQA has a non-standard JSON structure with a BOM and separate
         # image zips. Handle it manually. KTVIC is Parquet-backed on HF, so let
