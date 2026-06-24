@@ -70,7 +70,9 @@ class LoRALayer(nn.Module):
         nn.init.zeros_(self.lora_B.weight)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.lora_B(self.lora_A(x)) * self.scale
+        orig_dtype = x.dtype
+        x = x.to(self.lora_A.weight.dtype)
+        return (self.lora_B(self.lora_A(x)) * self.scale).to(orig_dtype)
 
 
 # ---------------------------------------------------------------------------
@@ -127,6 +129,12 @@ class MMoERouter(nn.Module):
         visual: torch.Tensor,           # (B, N^V, d_hidden)
         text: torch.Tensor,             # (B, N_T, d_hidden)
     ) -> torch.Tensor:
+        orig_dtype = x.dtype
+        router_dtype = next(self.parameters()).dtype
+        x      = x.to(router_dtype)
+        visual = visual.to(router_dtype)
+        text   = text.to(router_dtype)
+
         # Global visual / text representations: (B, 1, d_context)
         v_ctx = self.proj_visual(visual.mean(dim=1, keepdim=True))  # (B, 1, d_context)
         t_ctx = self.proj_text(text.mean(dim=1, keepdim=True))      # (B, 1, d_context)
@@ -138,7 +146,7 @@ class MMoERouter(nn.Module):
 
         # Concatenate per-token hidden state with global context
         router_in = torch.cat([x, v_ctx, t_ctx], dim=-1)  # (B, seq_len, d_hidden+2*d_context)
-        return self.mlp(router_in)                          # (B, seq_len, num_experts)
+        return self.mlp(router_in).to(orig_dtype)           # (B, seq_len, num_experts)
 
 
 # ---------------------------------------------------------------------------
