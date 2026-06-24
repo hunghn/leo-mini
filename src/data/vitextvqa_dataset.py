@@ -273,14 +273,19 @@ class VietnameseMultimodalDataset(Dataset):
                     )
 
                 # Normalise each row: resolve image path and ensure image_name field.
+                # Use explicit None checks (not "or") so falsy-but-valid values like
+                # image_id=0 are not silently dropped by Python's truthiness rules.
+                _missing: list = []
                 for row in rows:
-                    img_ref = (
-                        row.get("image")
-                        or row.get("image_name")
-                        or row.get("image_id")
-                        or ""
-                    )
-                    image_filename = os.path.basename(str(img_ref)) if img_ref else ""
+                    img_ref = None
+                    for _key in ("image", "image_name", "image_id"):
+                        _val = row.get(_key)
+                        if _val is not None:
+                            img_ref = _val
+                            break
+
+                    img_ref_str = str(img_ref) if img_ref is not None else ""
+                    image_filename = os.path.basename(img_ref_str) if img_ref_str else ""
                     row["image_name"] = image_filename
                     # Priority: exact filename match → stem match (handles ID-only refs
                     # like image_id=7815 where the file is "7815.jpg") → None fallback.
@@ -288,9 +293,19 @@ class VietnameseMultimodalDataset(Dataset):
                         row["image"] = image_paths[image_filename]
                     elif image_filename and image_filename in image_paths_stem:
                         row["image"] = image_paths_stem[image_filename]
-                        row["image_name"] = os.path.basename(row["image"])  # update to real filename
+                        row["image_name"] = os.path.basename(row["image"])
                     else:
-                        row["image"] = None   # will use image_dir fallback in __getitem__
+                        row["image"] = None
+                        _missing.append(img_ref_str or "(empty ref)")
+
+                if _missing:
+                    print(
+                        f"[ViTextVQA] {len(_missing)}/{len(rows)} samples could not be matched "
+                        f"to a local image. First 5 unresolved refs: {_missing[:5]}. "
+                        f"Filtering them out to avoid DataLoader crashes."
+                    )
+                    rows = [r for r in rows if r["image"] is not None]
+                    print(f"[ViTextVQA] {len(rows)} samples kept after filtering.")
 
                 return HFDataset.from_list(rows)
             except Exception as e:
