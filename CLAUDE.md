@@ -353,7 +353,7 @@ NUM_GPUS=2 bash scripts/run_vi_stage1.sh configs/models/qwen2_5_3b_vi.yaml
 
 ```bash
 python -m src.eval.vi_evaluator \
-    --model_path Qwen/Qwen2.5-3B-Instruct \
+    --model_path checkpoints/qwen2_5_3b_vi/stage2/llm_checkpoint \
     --stage3_weights checkpoints/qwen2_5_3b_vi/stage3/stage3_adapter_weights.pt \
     --split test \
     --output_dir results/vi_leomini/ \

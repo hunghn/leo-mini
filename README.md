@@ -335,6 +335,35 @@ checkpoints/qwen2_5_3b_vi/
     └── stage3_adapter_weights.pt  ← projector + CoTR + MMoE-LLM LoRA weights
 ```
 
+### Sau khi hoàn thành Stage 3
+
+Khi Stage 3 kết thúc, hai artifacts cần thiết để chạy evaluation là:
+
+| Artifact | Đường dẫn | Chứa gì |
+|----------|-----------|---------|
+| LLM backbone (Stage 2) | `checkpoints/qwen2_5_3b_vi/stage2/llm_checkpoint/` | Qwen2.5-3B đã full SFT |
+| Stage 3 adapters | `checkpoints/qwen2_5_3b_vi/stage3/stage3_adapter_weights.pt` | projector + CoTR + MMoE-LLM LoRA |
+
+**Chạy evaluation ngay sau Stage 3:**
+
+```bash
+python -m src.eval.vi_evaluator \
+    --model_path checkpoints/qwen2_5_3b_vi/stage2/llm_checkpoint \
+    --stage3_weights checkpoints/qwen2_5_3b_vi/stage3/stage3_adapter_weights.pt \
+    --split test \
+    --output_dir results/vi_leomini/ \
+    --log_dir logs/qwen2_5_3b_vi/ \
+    --vision_experts clip pix2struct \
+    --n_visual 128
+```
+
+> **Sai lầm thường gặp**: dùng `--model_path Qwen/Qwen2.5-3B-Instruct` (base model) thay cho
+> `stage2/llm_checkpoint`. `stage3_adapter_weights.pt` **không** bao gồm LLM backbone — nếu
+> không load Stage 2 backbone, LLM vẫn là model gốc chưa fine-tune, dẫn đến ANLS thấp hơn
+> đáng kể.
+
+---
+
 ### Qwen2.5 conversation format
 
 Vi-LEO-MINI dùng Qwen2.5 chat template thay cho USER:/ASSISTANT: của bản gốc:
@@ -410,10 +439,15 @@ CKPT_PHI="checkpoints/phi3_5_mini/stage3/stage3_adapter_weights.pt" \
 
 ### Chạy evaluation
 
+> **Lưu ý quan trọng về `--model_path`**: `stage3_adapter_weights.pt` chỉ chứa adapters
+> (projector + CoTR + MMoE-LLM LoRA), **không** chứa LLM backbone. LLM backbone đã được
+> fine-tune ở Stage 2 và lưu tại `checkpoints/qwen2_5_3b_vi/stage2/llm_checkpoint/`.
+> Phải dùng đường dẫn đó thay cho `Qwen/Qwen2.5-3B-Instruct` để có kết quả đúng.
+
 ```bash
 # Sau khi hoàn thành Stage 3:
 python -m src.eval.vi_evaluator \
-    --model_path Qwen/Qwen2.5-3B-Instruct \
+    --model_path checkpoints/qwen2_5_3b_vi/stage2/llm_checkpoint \
     --stage3_weights checkpoints/qwen2_5_3b_vi/stage3/stage3_adapter_weights.pt \
     --split test \
     --output_dir results/vi_leomini/ \
@@ -423,11 +457,10 @@ python -m src.eval.vi_evaluator \
 
 # Nhanh — chỉ 200 mẫu:
 python -m src.eval.vi_evaluator \
-    --model_path Qwen/Qwen2.5-3B-Instruct \
+    --model_path checkpoints/qwen2_5_3b_vi/stage2/llm_checkpoint \
     --stage3_weights checkpoints/qwen2_5_3b_vi/stage3/stage3_adapter_weights.pt \
     --split validation \
     --limit 200 \
-    --load_in_4bit \
     --output_dir results/vi_leomini/
 ```
 
@@ -519,12 +552,17 @@ sys.path.insert(0, '/content/leo_mini')
 
 ### Load Vi-LEO-MINI (4-bit, Colab T4)
 
+> **Lưu ý**: Nếu bạn có `stage2/llm_checkpoint/` trên Drive, hãy dùng đường dẫn đó làm
+> `llm_path` để có kết quả tốt hơn. `Qwen/Qwen2.5-3B-Instruct` chỉ dùng khi không có
+> checkpoint Stage 2 (kết quả sẽ thấp hơn vì LLM backbone chưa được fine-tune).
+
 ```python
 import torch
 from src.models.leo_mini import LeoMini
 
+# Tốt nhất: dùng Stage 2 checkpoint (LLM đã fine-tune)
 model = LeoMini.from_pretrained(
-    llm_path="Qwen/Qwen2.5-3B-Instruct",
+    llm_path="/content/drive/MyDrive/vi_leomini/stage2/llm_checkpoint",
     stage3_weights="/content/drive/MyDrive/vi_leomini/stage3_adapter_weights.pt",
     load_in_4bit=True,
     vision_experts=["clip", "pix2struct"],
@@ -579,7 +617,7 @@ print("Câu trả lời:", answer)
 
 ```python
 !python -m src.eval.vi_evaluator \
-    --model_path Qwen/Qwen2.5-3B-Instruct \
+    --model_path /content/drive/MyDrive/vi_leomini/stage2/llm_checkpoint \
     --stage3_weights /content/drive/MyDrive/vi_leomini/stage3_adapter_weights.pt \
     --split validation \
     --limit 500 \

@@ -176,8 +176,10 @@ class LeoMini(nn.Module):
             # All ViT experts produce 576 tokens; concatenate features
             visual_concat = torch.cat(visual_list, dim=-1)  # (B, 576, Σd_i)
 
-        # Project to LLM dimension
-        return self.projector(visual_concat)  # (B, N^V or 576, d_LLM)
+        # Project to LLM dimension; cast to LLM dtype so inputs_embeds is consistent
+        vis = self.projector(visual_concat)
+        target_dtype = self.llm.get_input_embeddings().weight.dtype
+        return vis.to(target_dtype)
 
     # ------------------------------------------------------------------
     # Forward
