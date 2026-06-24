@@ -235,7 +235,14 @@ class VietnameseMultimodalDataset(Dataset):
                 # Try to download and extract the images zip (one-time setup).
                 # Each row gets an "image" field set to the local file path so
                 # _to_pil() can open it directly without needing vi_image_dir.
+                #
+                # Two lookup dicts are built:
+                #   image_paths      — keyed by full filename ("12345.jpg")
+                #   image_paths_stem — keyed by stem only   ("12345")
+                # The stem lookup handles JSON rows where the image reference is
+                # just an integer ID (e.g. image_id=7815) without an extension.
                 image_paths: dict = {}
+                image_paths_stem: dict = {}
                 try:
                     zip_local = hf_hub_download(
                         repo_id=hf_name,
@@ -255,7 +262,9 @@ class VietnameseMultimodalDataset(Dataset):
                     for _root, _, _files in os.walk(image_root):
                         for _fn in _files:
                             if _fn.lower().endswith((".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp")):
-                                image_paths[_fn] = os.path.join(_root, _fn)
+                                _full_path = os.path.join(_root, _fn)
+                                image_paths[_fn] = _full_path
+                                image_paths_stem[os.path.splitext(_fn)[0]] = _full_path
                     print(f"[ViTextVQA] {len(image_paths):,} images available in {image_root}")
                 except Exception as _img_err:
                     print(
@@ -273,8 +282,13 @@ class VietnameseMultimodalDataset(Dataset):
                     )
                     image_filename = os.path.basename(str(img_ref)) if img_ref else ""
                     row["image_name"] = image_filename
+                    # Priority: exact filename match → stem match (handles ID-only refs
+                    # like image_id=7815 where the file is "7815.jpg") → None fallback.
                     if image_filename and image_filename in image_paths:
-                        row["image"] = image_paths[image_filename]   # resolved local path
+                        row["image"] = image_paths[image_filename]
+                    elif image_filename and image_filename in image_paths_stem:
+                        row["image"] = image_paths_stem[image_filename]
+                        row["image_name"] = os.path.basename(row["image"])  # update to real filename
                     else:
                         row["image"] = None   # will use image_dir fallback in __getitem__
 
