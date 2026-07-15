@@ -211,32 +211,35 @@ class LeoMini(nn.Module):
             vis_tokens = self._encode_images(
                 pixel_values, pix2struct_inputs, text_for_cotr
             )  # (B, N^V, d_LLM)
+            n_vis = vis_tokens.shape[1]
 
-            # 3. Set router context (before LLM forward)
+            # 3. Merge attention_mask BEFORE setting router context: MMoELinear
+            # reads ctx_buffer.attention_mask against the merged sequence
+            # (visual + text tokens) to exclude padded positions from the
+            # balance-loss routing statistics.
+            merged_attention_mask = (
+                self._merge_attention_mask(attention_mask, n_vis, input_ids)
+                if attention_mask is not None else None
+            )
+
+            # 4. Set router context (before LLM forward)
             # text context = the portion of the sequence that is text
             text_global = text_embeds  # (B, L, d_LLM) — router uses mean internally
-            self.ctx_buffer.set(vis_tokens, text_global)
+            self.ctx_buffer.set(vis_tokens, text_global, merged_attention_mask)
 
-            # 4. Replace IMAGE_TOKEN_INDEX positions with visual tokens
+            # 5. Replace IMAGE_TOKEN_INDEX positions with visual tokens
             inputs_embeds = self._merge_visual_text(
                 text_embeds, vis_tokens, input_ids
             )  # (B, L', d_LLM)
+            attention_mask = merged_attention_mask
+            if labels is not None:
+                labels = self._merge_labels(labels, n_vis, input_ids)
         else:
             inputs_embeds = text_embeds
             self.ctx_buffer.clear()
 
         if self.training:
             inputs_embeds.requires_grad_(True)
-
-        # 5. Build attention mask and labels for merged sequence
-        if pixel_values is not None:
-            n_vis = vis_tokens.shape[1]
-            if attention_mask is not None:
-                attention_mask = self._merge_attention_mask(
-                    attention_mask, n_vis, input_ids
-                )
-            if labels is not None:
-                labels = self._merge_labels(labels, n_vis, input_ids)
 
         # 6. LLM forward
         llm_dtype = next(self.llm.parameters()).dtype
@@ -459,12 +462,13 @@ class LeoMini(nn.Module):
         if pixel_values is not None:
             text_for_cotr = text_embeds if self.cotr is not None else None
             vis_tokens = self._encode_images(pixel_values, pix2struct_inputs, text_for_cotr)
-            self.ctx_buffer.set(vis_tokens, text_embeds)
+            merged_attention_mask = (
+                self._merge_attention_mask(attention_mask, vis_tokens.shape[1], input_ids)
+                if attention_mask is not None else None
+            )
+            self.ctx_buffer.set(vis_tokens, text_embeds, merged_attention_mask)
             inputs_embeds = self._merge_visual_text(text_embeds, vis_tokens, input_ids)
-            if attention_mask is not None:
-                attention_mask = self._merge_attention_mask(
-                    attention_mask, vis_tokens.shape[1], input_ids
-                )
+            attention_mask = merged_attention_mask
         else:
             inputs_embeds = text_embeds
 
@@ -520,6 +524,7 @@ class LeoMini(nn.Module):
         from transformers import BitsAndBytesConfig
 
         quant_config = None
+        device_map = None
         if load_in_4bit:
             quant_config = BitsAndBytesConfig(
                 load_in_4bit=True,
@@ -527,6 +532,18 @@ class LeoMini(nn.Module):
                 bnb_4bit_quant_type="nf4",
                 bnb_4bit_use_double_quant=True,
             )
+            # bnb 4-bit weights are quantised at load time and must be pinned to
+            # a device up front (unlike bf16/fp32 weights, they can't just be
+            # moved with .to() afterwards). Pin to a single GPU explicitly
+            # rather than device_map="auto": "auto" can shard the model across
+            # multiple visible GPUs, which both (a) silently gets undone by the
+            # first `.to(device)` call from HF Trainer / eval code (since the
+            # outer LeoMini wrapper never exposes hf_device_map) and (b)
+            # conflicts with DDP-based multi-GPU training, where each rank
+            # process would otherwise try to auto-shard across every GPU it
+            # can see. Training never uses load_in_4bit (only eval/demo,
+            # always single-process), so pinning to device 0 here is safe.
+            device_map = {"": 0} if torch.cuda.is_available() else None
 
         print(f"Loading LLM from {llm_path} ...")
         if attn_implementation:
@@ -535,7 +552,7 @@ class LeoMini(nn.Module):
             llm_path,
             quantization_config=quant_config,
             torch_dtype=torch.bfloat16 if not load_in_4bit else None,
-            device_map="auto",
+            device_map=device_map,
             **kwargs,
         )
 

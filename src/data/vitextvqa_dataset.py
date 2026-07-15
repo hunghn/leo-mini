@@ -460,16 +460,7 @@ class VietnameseMultimodalDataset(Dataset):
         # ------------------------------------------------------------------
         # Tokenize Qwen2.5 conversation
         # ------------------------------------------------------------------
-        full_text   = _qwen2_format(question, answer)
         prompt_text = _qwen2_prompt_only(question)
-
-        full_enc = self.tokenizer(
-            full_text,
-            truncation=True,
-            max_length=self.max_length,
-            return_tensors="pt",
-            add_special_tokens=False,
-        )
         prompt_enc = self.tokenizer(
             prompt_text,
             truncation=True,
@@ -477,18 +468,38 @@ class VietnameseMultimodalDataset(Dataset):
             return_tensors="pt",
             add_special_tokens=False,
         )
-
-        input_ids  = full_enc["input_ids"][0]   # (L,)
         prompt_ids = prompt_enc["input_ids"][0]
 
-        # Replace <image> token id with sentinel
+        # Replace <image> token id with sentinel. Done on prompt_ids up front
+        # so it stays consistent with input_ids below (both eval and train
+        # branches derive from this same tokenization).
         image_token_id = self.tokenizer.convert_tokens_to_ids(IMAGE_TOKEN)
         if image_token_id is not None and image_token_id != self.tokenizer.unk_token_id:
-            input_ids[input_ids == image_token_id] = IMAGE_TOKEN_INDEX
+            prompt_ids[prompt_ids == image_token_id] = IMAGE_TOKEN_INDEX
 
-        labels = _build_labels_qwen2(input_ids, prompt_ids)
+        if self.for_eval:
+            # Inference: input_ids must be the PROMPT ONLY. Feeding the
+            # ground-truth answer here (as the full train-time text does)
+            # would make generate() continue *after* the correct answer
+            # instead of predicting it, producing meaningless output.
+            input_ids = prompt_ids
+            labels = torch.full_like(input_ids, IGNORE_INDEX)  # unused at eval
+            attention_mask = torch.ones_like(input_ids)
+        else:
+            full_text = _qwen2_format(question, answer)
+            full_enc = self.tokenizer(
+                full_text,
+                truncation=True,
+                max_length=self.max_length,
+                return_tensors="pt",
+                add_special_tokens=False,
+            )
+            input_ids = full_enc["input_ids"][0]   # (L,)
+            if image_token_id is not None and image_token_id != self.tokenizer.unk_token_id:
+                input_ids[input_ids == image_token_id] = IMAGE_TOKEN_INDEX
 
-        attention_mask = (input_ids != (self.tokenizer.pad_token_id or 0)).long()
+            labels = _build_labels_qwen2(input_ids, prompt_ids)
+            attention_mask = (input_ids != (self.tokenizer.pad_token_id or 0)).long()
 
         # ------------------------------------------------------------------
         # Image processing

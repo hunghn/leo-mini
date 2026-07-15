@@ -197,6 +197,19 @@ class LeoMiniTrainer(Trainer):
 # ---------------------------------------------------------------------------
 
 def train(args: LeoMiniTrainingArgs) -> None:
+    if args.stage == 3 and args.gradient_checkpointing:
+        raise ValueError(
+            "gradient_checkpointing is not safe for Stage 3: MMoELinear reads "
+            "routing context from a shared ContextBuffer that LeoMini.forward() "
+            "clears right after returning. Gradient checkpointing recomputes "
+            "the MLP forward during backward, by which point the buffer is "
+            "already empty — MMoELinear would silently fall back to the "
+            "text-only path (f_ORI + f_GEN only), producing gradients that "
+            "don't match the forward pass used to compute the loss. "
+            "Set gradient_checkpointing: false for Stage 3 (CoTR + LoRA "
+            "adapters are light enough that it isn't needed anyway)."
+        )
+
     # --- Load model ---
     # Stage 2 needs Stage 1's trained projector; Stage 3 needs Stage 2's.
     # When --model_config is used, projector_path is auto-derived in __main__.

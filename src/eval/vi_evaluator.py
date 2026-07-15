@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -281,6 +282,16 @@ def load_eval_history(output_dir: str) -> List[Dict[str, Any]]:
 def _cli() -> None:
     parser = argparse.ArgumentParser(description="Vi-LEO-MINI evaluator")
     parser.add_argument("--model_path",    required=True, help="Base LLM HF path or local dir")
+    parser.add_argument(
+        "--projector_path",
+        default=None,
+        help=(
+            "Path to projector_weights.pt saved after Stage 1/2. Auto-derived as "
+            "the sibling 'projector_weights.pt' of --model_path if not set. "
+            "Without it (and without --stage3_weights, which also carries the "
+            "projector) the VisualProjector is randomly initialised."
+        ),
+    )
     parser.add_argument("--stage3_weights", default=None,  help="Path to stage3_adapter_weights.pt")
     parser.add_argument("--split",          default="test", choices=["train","validation","test"])
     parser.add_argument("--output_dir",     default="results/vi_leomini")
@@ -310,6 +321,28 @@ def _cli() -> None:
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
+    # Resolve projector_path: explicit > auto-derived sibling of model_path.
+    # stage3_weights (if given) also carries the projector and is loaded
+    # afterwards in from_pretrained(), so it takes precedence either way.
+    projector_path = args.projector_path
+    if projector_path is None:
+        candidate = os.path.join(
+            os.path.dirname(os.path.normpath(args.model_path)), "projector_weights.pt"
+        )
+        if os.path.isfile(candidate):
+            projector_path = candidate
+            print(f"[Eval] Auto-derived projector_path: {projector_path}")
+        elif not args.stage3_weights:
+            print(
+                f"\nERROR: No --projector_path given and none found at '{candidate}'.\n"
+                f"  Without it the VisualProjector is randomly initialised, and the\n"
+                f"  model will effectively be blind to the image regardless of\n"
+                f"  --model_path. Pass --projector_path explicitly, or --stage3_weights\n"
+                f"  (which bundles the trained projector).\n",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
     run_id  = make_run_id(os.path.basename(args.model_path), args.stage)
     os.makedirs(args.log_dir, exist_ok=True)
     logger = ViLeoMiniLogger(
@@ -321,6 +354,7 @@ def _cli() -> None:
     print(f"Loading model from {args.model_path} ...")
     model = LeoMini.from_pretrained(
         llm_path=args.model_path,
+        projector_path=projector_path,
         stage3_weights=args.stage3_weights,
         enable_stage3_modules=bool(args.stage3_weights),
         n_visual=args.n_visual,

@@ -40,14 +40,24 @@ class ContextBuffer:
     def __init__(self) -> None:
         self.visual: Optional[torch.Tensor] = None  # (B, N^V, d_LLM)
         self.text:   Optional[torch.Tensor] = None  # (B, N_T, d_LLM)
+        # (B, seq_len) mask over the merged (visual+text) sequence, used to
+        # exclude padded positions from the balance-loss routing statistics.
+        self.attention_mask: Optional[torch.Tensor] = None
 
-    def set(self, visual: torch.Tensor, text: torch.Tensor) -> None:
+    def set(
+        self,
+        visual: torch.Tensor,
+        text: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+    ) -> None:
         self.visual = visual
         self.text   = text
+        self.attention_mask = attention_mask
 
     def clear(self) -> None:
         self.visual = None
         self.text   = None
+        self.attention_mask = None
 
 
 # ---------------------------------------------------------------------------
@@ -229,12 +239,19 @@ class MMoELinear(nn.Module):
         probs  = torch.softmax(logits, dim=-1)                        # (B, seq_len, E)
         chosen = probs.argmax(dim=-1)                                  # (B, seq_len)
 
-        # Accumulate routing stats for balanced loss
+        # Accumulate routing stats for balanced loss — exclude padded
+        # positions (attention_mask == 0) so the balance target (1/E) is
+        # computed over real tokens only, not diluted by right-padding.
         if self.training:
             with torch.no_grad():
+                mask = self.ctx.attention_mask
+                if mask is not None:
+                    valid = mask.to(device=chosen.device, dtype=torch.bool)
+                else:
+                    valid = torch.ones_like(chosen, dtype=torch.bool)
                 for e in range(self.num_special):
-                    self._expert_counts[e] += (chosen == e).float().sum()
-                self._total_tokens += chosen.numel()
+                    self._expert_counts[e] += ((chosen == e) & valid).float().sum()
+                self._total_tokens += valid.sum().item()
 
         # Top-1 expert output: build a weighted sum (differentiable through probs)
         # Hard top-1 with straight-through: use one-hot * probs for routing
