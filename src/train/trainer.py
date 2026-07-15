@@ -33,6 +33,9 @@ from transformers import (
     AutoTokenizer,
     CLIPImageProcessor,
     Trainer,
+    TrainerCallback,
+    TrainerControl,
+    TrainerState,
     TrainingArguments,
 )
 from transformers.trainer_utils import get_last_checkpoint
@@ -43,6 +46,72 @@ from ..data.vitextvqa_dataset import ViTextVQADataset
 from ..models.leo_mini import LeoMini
 from ..models.vision_experts import Pix2StructExpert
 from ..utils.logger import ViLeoMiniLogger, LeoMiniLoggingCallback, make_run_id
+from ..eval.vi_evaluator import ViTextVQAEvaluator
+
+
+# ---------------------------------------------------------------------------
+# Mid-training validation callback
+# ---------------------------------------------------------------------------
+
+class LeoMiniMidTrainEvalCallback(TrainerCallback):
+    """
+    Runs ANLS/EM/F1 on a small slice of the validation split every `eval_steps`
+    training steps, logged into the same JSON log as train_step events (visible
+    live in the log file / eval_metrics_history.png while training is still
+    running) — without this, a multi-hour Stage 3 run gives no signal on
+    whether it's actually working until it finishes.
+
+    Kept deliberately lightweight: `eval_limit` samples only, and the
+    validation dataset is built once (by the caller) and reused across calls
+    instead of re-downloaded each time.
+    """
+
+    def __init__(
+        self,
+        evaluator:   ViTextVQAEvaluator,
+        dataset,
+        eval_steps:  int,
+        eval_limit:  int,
+        split_name:  str,
+        verbose:     bool = True,
+    ) -> None:
+        self.evaluator  = evaluator
+        self.dataset    = dataset
+        self.eval_steps = eval_steps
+        self.eval_limit = eval_limit
+        self.split_name = split_name
+        self.verbose    = verbose
+
+    def on_step_end(
+        self,
+        args:    TrainingArguments,
+        state:   TrainerState,
+        control: TrainerControl,
+        model=None,
+        **kwargs,
+    ) -> TrainerControl:
+        if self.eval_steps <= 0 or state.global_step == 0:
+            return control
+        if state.global_step % self.eval_steps != 0:
+            return control
+
+        target_model = model if model is not None else self.evaluator.model
+        was_training = target_model.training
+        target_model.eval()
+        try:
+            print(f"\n[MidTrainEval] step={state.global_step} — running {self.eval_limit} "
+                  f"validation samples ...")
+            self.evaluator.evaluate_dataset(
+                self.dataset,
+                limit=self.eval_limit,
+                global_step=state.global_step,
+                split=self.split_name,
+                verbose=self.verbose,
+            )
+        finally:
+            if was_training:
+                target_model.train()
+        return control
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +148,13 @@ class LeoMiniTrainingArgs:
 
     # Log dir for structured JSON logs and plots
     log_dir:        str = "logs"
+
+    # --- Mid-training validation ---
+    # Runs ANLS/EM/F1 on a small slice of vi_val_path every eval_steps steps,
+    # logged via the same JSON log used for train_step (see LeoMiniMidTrainEvalCallback).
+    # 0 = disabled (default off — periodic generation adds overhead; opt in per stage config).
+    eval_steps:     int = 0
+    eval_limit:     int = 50
 
     # --- Architecture ---
     n_visual:     int = 64
@@ -347,6 +423,49 @@ def train(args: LeoMiniTrainingArgs) -> None:
             n_samples=len(train_dataset),
         )
 
+    # ------------------------------------------------------------------
+    # Mid-training validation (opt-in via eval_steps > 0)
+    # ------------------------------------------------------------------
+    midtrain_eval_cb = None
+    if _use_vi and args.vi_val_path and args.eval_steps > 0:
+        print(
+            f"[MidTrainEval] Building validation set from '{hf_dataset_name}' "
+            f"split='{args.vi_val_path}' (every {args.eval_steps} steps, "
+            f"{args.eval_limit} samples) ..."
+        )
+        val_dataset = DatasetClass(
+            split=args.vi_val_path,
+            tokenizer=tokenizer,
+            image_processor=image_processor,
+            pix2struct_processor=pix2struct_processor,
+            max_length=256,   # inference: question-only, shorter is fine
+            hf_dataset_name=hf_dataset_name,
+            cache_dir=args.vi_cache_dir or None,
+            for_eval=True,
+            image_dir=args.vi_image_dir or None,
+        )
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        val_evaluator = ViTextVQAEvaluator(
+            model=model,
+            stage=args.stage,
+            device=device,
+            max_new_tokens=32,   # short: this is a directional signal, not the final eval
+            batch_size=1,
+            logger=vi_logger,
+        )
+        midtrain_eval_cb = LeoMiniMidTrainEvalCallback(
+            evaluator=val_evaluator,
+            dataset=val_dataset,
+            eval_steps=args.eval_steps,
+            eval_limit=args.eval_limit,
+            split_name=args.vi_val_path,
+        )
+    elif args.eval_steps > 0:
+        print(
+            "[MidTrainEval] eval_steps > 0 but vi_val_path is not set (or not using "
+            "the Vietnamese dataset path) — mid-training validation disabled."
+        )
+
     # Enable gradient checkpointing on the LLM before wrapping with Trainer
     # so that HuggingFace's Trainer does not attempt to call the method itself
     # (which would fail for non-HuggingFace nn.Module wrappers like LeoMini).
@@ -381,6 +500,9 @@ def train(args: LeoMiniTrainingArgs) -> None:
     )
 
     logging_cb = LeoMiniLoggingCallback(logger=vi_logger, stage=args.stage)
+    callbacks = [logging_cb]
+    if midtrain_eval_cb is not None:
+        callbacks.append(midtrain_eval_cb)
 
     trainer = LeoMiniTrainer(
         model=model,
@@ -388,7 +510,7 @@ def train(args: LeoMiniTrainingArgs) -> None:
         train_dataset=train_dataset,
         data_collator=collator,
         processing_class=tokenizer,
-        callbacks=[logging_cb],
+        callbacks=callbacks,
     )
 
     # --- Resume if checkpoint exists ---

@@ -44,5 +44,12 @@ bf16:                  true
 optim:                 "adamw_bnb_8bit"
 gradient_checkpointing: false    # CoTR + LoRA are light — not needed
 
+# Mid-training validation: run ANLS/EM/F1 on 50 samples of vi_val_path every
+# 200 steps, logged into the same JSON log as train_step (visible live in
+# eval_metrics_history.png while training is still running). Without this,
+# a multi-hour Stage 3 run gives no signal until it fully finishes.
+eval_steps: 200
+eval_limit: 50
+
 balance_loss_lambda: 0.05
 deepspeed: null

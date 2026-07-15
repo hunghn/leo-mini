@@ -145,13 +145,36 @@ class ViTextVQAEvaluator:
             image_dir=image_dir,
         )
 
-        if limit is not None:
-            dataset._ds = dataset._ds.select(range(min(limit, len(dataset._ds))))
+        return self.evaluate_dataset(dataset, limit=limit, global_step=global_step, split=split)
+
+    # ------------------------------------------------------------------
+    def evaluate_dataset(
+        self,
+        dataset,
+        limit:       Optional[int] = None,
+        global_step: int           = 0,
+        split:       str           = "validation",
+        verbose:     bool          = False,
+    ) -> EvalResult:
+        """
+        Run evaluation on an already-built dataset (for_eval=True).
+
+        Split out from evaluate() so callers that need to run this repeatedly
+        (e.g. mid-training validation, see LeoMiniMidTrainEvalCallback in
+        trainer.py) can build the ViTextVQADataset once and reuse it across
+        calls, instead of re-downloading/re-parsing the split JSON every time.
+        Does not mutate `dataset` — `limit` only bounds the loop range.
+
+        verbose: print image name, question, prediction, and ground truth for
+            every sample as it runs (not just the aggregate every-100 progress
+            line). Meant for small eval_limit runs (mid-training monitoring),
+            not for full-dataset eval where it would flood the console.
+        """
+        total = len(dataset) if limit is None else min(limit, len(dataset))
 
         predictions: List[str]         = []
         ground_truths: List[List[str]] = []
 
-        total = len(dataset)
         print(f"[Eval] Running inference on {total} samples (split={split}) ...")
         t0 = time.time()
 
@@ -165,7 +188,16 @@ class ViTextVQAEvaluator:
             predictions.append(pred)
             ground_truths.append(answers)
 
-            if (idx + 1) % 100 == 0 or idx == total - 1:
+            if verbose:
+                anls_i = compute_dataset_metrics([pred], [answers])["anls"]
+                print(
+                    f"  [{idx+1}/{total}] Đang validation hình '{image_name}'\n"
+                    f"    Q       : {question}\n"
+                    f"    predict : {pred!r}\n"
+                    f"    ground truth: {answers}\n"
+                    f"    ANLS    : {anls_i:.2f}"
+                )
+            elif (idx + 1) % 100 == 0 or idx == total - 1:
                 elapsed = time.time() - t0
                 print(f"  [{idx+1}/{total}]  {elapsed:.0f}s elapsed")
 

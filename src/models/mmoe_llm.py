@@ -43,21 +43,29 @@ class ContextBuffer:
         # (B, seq_len) mask over the merged (visual+text) sequence, used to
         # exclude padded positions from the balance-loss routing statistics.
         self.attention_mask: Optional[torch.Tensor] = None
+        # (B, N_T) mask over `text` marking real instruction-token positions
+        # (excludes the assistant response, the <image> sentinel, and padding).
+        # Needed so the router's masked-mean over `text` isn't diluted by the
+        # zeroed-out response tokens — see LeoMini._build_prompt_mask().
+        self.text_mask: Optional[torch.Tensor] = None
 
     def set(
         self,
         visual: torch.Tensor,
         text: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
+        text_mask: Optional[torch.Tensor] = None,
     ) -> None:
         self.visual = visual
         self.text   = text
         self.attention_mask = attention_mask
+        self.text_mask = text_mask
 
     def clear(self) -> None:
         self.visual = None
         self.text   = None
         self.attention_mask = None
+        self.text_mask = None
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +146,7 @@ class MMoERouter(nn.Module):
         x: torch.Tensor,               # (B, seq_len, d_hidden)  — MLP input hidden state
         visual: torch.Tensor,           # (B, N^V, d_hidden)
         text: torch.Tensor,             # (B, N_T, d_hidden)
+        text_mask: Optional[torch.Tensor] = None,  # (B, N_T) — real instruction-token positions
     ) -> torch.Tensor:
         orig_dtype = x.dtype
         router_dtype = next(self.parameters()).dtype
@@ -145,9 +154,23 @@ class MMoERouter(nn.Module):
         visual = visual.to(router_dtype)
         text   = text.to(router_dtype)
 
-        # Global visual / text representations: (B, 1, d_context)
+        # Global visual representation: (B, 1, d_context)
         v_ctx = self.proj_visual(visual.mean(dim=1, keepdim=True))  # (B, 1, d_context)
-        t_ctx = self.proj_text(text.mean(dim=1, keepdim=True))      # (B, 1, d_context)
+
+        # Global text representation, masked-mean over real instruction tokens
+        # only. `text` already has non-instruction positions (assistant
+        # response / <image> sentinel / padding) zeroed out by the caller, but
+        # a plain `.mean(dim=1)` would still divide by the FULL sequence
+        # length, diluting the signal by however many response tokens existed
+        # at training time — a length that doesn't exist at inference. Using
+        # `text_mask` to divide by the true count of kept tokens keeps the
+        # magnitude consistent between training and inference.
+        if text_mask is not None:
+            mask = text_mask.to(router_dtype).unsqueeze(-1)             # (B, N_T, 1)
+            denom = mask.sum(dim=1, keepdim=True).clamp(min=1.0)         # (B, 1, 1)
+            t_ctx = self.proj_text((text * mask).sum(dim=1, keepdim=True) / denom)
+        else:
+            t_ctx = self.proj_text(text.mean(dim=1, keepdim=True))      # (B, 1, d_context)
 
         # Expand global context to match sequence length
         seq_len = x.shape[1]
@@ -235,7 +258,7 @@ class MMoELinear(nn.Module):
         if self.ctx.visual is None or self.ctx.text is None:
             return y  # f_ORI + f_GEN only (text-only path)
 
-        logits = self.router(x, self.ctx.visual, self.ctx.text)      # (B, seq_len, E)
+        logits = self.router(x, self.ctx.visual, self.ctx.text, self.ctx.text_mask)  # (B, seq_len, E)
         probs  = torch.softmax(logits, dim=-1)                        # (B, seq_len, E)
         chosen = probs.argmax(dim=-1)                                  # (B, seq_len)
 

@@ -182,6 +182,37 @@ class LeoMini(nn.Module):
         return vis.to(target_dtype)
 
     # ------------------------------------------------------------------
+    # Prompt-only text mask (for CoTR text-visual attention and MMoE-LLM router)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_prompt_mask(
+        input_ids:      torch.Tensor,
+        attention_mask: Optional[torch.Tensor],
+        labels:         Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        """
+        Boolean mask (B, L) marking positions that are real INSTRUCTION text —
+        excludes the <image> sentinel, the assistant response (labels !=
+        IGNORE_INDEX, only present during teacher-forced training), and padding.
+
+        Paper Eq. 1 defines T (instruction tokens) as disjoint from the
+        response Y. CoTR's s_TEXT (Eq. 5) and the MMoE-LLM router (Eq. 8) must
+        condition on T only. Without this mask, training teacher-forces the
+        ground-truth answer into the pooled text signal while inference never
+        can (the answer doesn't exist yet) — a train/inference distribution
+        shift that silently corrupts visual-token consolidation and expert
+        routing without showing up in the training loss.
+        """
+        IGNORE_INDEX = -100
+        keep = input_ids != IMAGE_TOKEN_INDEX
+        if labels is not None:
+            keep = keep & (labels == IGNORE_INDEX)
+        if attention_mask is not None:
+            keep = keep & attention_mask.bool()
+        return keep
+
+    # ------------------------------------------------------------------
     # Forward
     # ------------------------------------------------------------------
 
@@ -206,8 +237,15 @@ class LeoMini(nn.Module):
 
         if pixel_values is not None:
             # 2. Encode images
-            # For CoTR text context we use current text embeddings
-            text_for_cotr = text_embeds if self.cotr is not None else None
+            # For CoTR text context we use current text embeddings, restricted
+            # to prompt-only positions (see _build_prompt_mask) so training
+            # doesn't leak the ground-truth answer into the consolidation signal.
+            text_for_cotr = None
+            prompt_mask = None
+            if self.cotr is not None:
+                prompt_mask = self._build_prompt_mask(input_ids, attention_mask, labels)
+                text_for_cotr = text_embeds * prompt_mask.unsqueeze(-1).to(text_embeds.dtype)
+
             vis_tokens = self._encode_images(
                 pixel_values, pix2struct_inputs, text_for_cotr
             )  # (B, N^V, d_LLM)
@@ -223,9 +261,11 @@ class LeoMini(nn.Module):
             )
 
             # 4. Set router context (before LLM forward)
-            # text context = the portion of the sequence that is text
-            text_global = text_embeds  # (B, L, d_LLM) — router uses mean internally
-            self.ctx_buffer.set(vis_tokens, text_global, merged_attention_mask)
+            # Reuse the same prompt-only text signal as CoTR (see above) so the
+            # router's text conditioning (Eq. 8) is consistent between training
+            # and inference too.
+            text_global = text_for_cotr if text_for_cotr is not None else text_embeds
+            self.ctx_buffer.set(vis_tokens, text_global, merged_attention_mask, text_mask=prompt_mask)
 
             # 5. Replace IMAGE_TOKEN_INDEX positions with visual tokens
             inputs_embeds = self._merge_visual_text(
@@ -460,13 +500,22 @@ class LeoMini(nn.Module):
         text_embeds = embed(safe_ids)
 
         if pixel_values is not None:
-            text_for_cotr = text_embeds if self.cotr is not None else None
+            # labels=None here: at inference input_ids IS the prompt already
+            # (no answer to exclude), so this matches training's prompt-only
+            # masking exactly — see _build_prompt_mask / forward().
+            text_for_cotr = None
+            prompt_mask = None
+            if self.cotr is not None:
+                prompt_mask = self._build_prompt_mask(input_ids, attention_mask, labels=None)
+                text_for_cotr = text_embeds * prompt_mask.unsqueeze(-1).to(text_embeds.dtype)
+
             vis_tokens = self._encode_images(pixel_values, pix2struct_inputs, text_for_cotr)
             merged_attention_mask = (
                 self._merge_attention_mask(attention_mask, vis_tokens.shape[1], input_ids)
                 if attention_mask is not None else None
             )
-            self.ctx_buffer.set(vis_tokens, text_embeds, merged_attention_mask)
+            text_global = text_for_cotr if text_for_cotr is not None else text_embeds
+            self.ctx_buffer.set(vis_tokens, text_global, merged_attention_mask, text_mask=prompt_mask)
             inputs_embeds = self._merge_visual_text(text_embeds, vis_tokens, input_ids)
             attention_mask = merged_attention_mask
         else:
