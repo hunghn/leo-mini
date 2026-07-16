@@ -39,7 +39,11 @@ log_dir: "logs/qwen2_5_3b_vi"
 # Hardware — Qwen2.5-3B Stage 2 is memory-bound on 1x48 GB.
 # Keep micro-batch size in the stage YAML; use accumulation here only to set
 # the effective batch target shared across stages.
+#
+# gradient_checkpointing is NOT set here — it is stage-dependent (Stage 2
+# needs it, Stage 3 must not use it; see config_vi_stage{2,3}.yaml) and this
+# model config is applied to all 3 stages via cfg.update(), which would
+# otherwise clobber the stage YAML's per-stage value.
 gradient_accumulation: 32
-gradient_checkpointing: true
 optim: "adamw_bnb_8bit"
 bf16:  true

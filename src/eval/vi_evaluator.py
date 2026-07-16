@@ -122,6 +122,7 @@ class ViTextVQAEvaluator:
         limit:           Optional[int] = None,
         global_step:     int           = 0,
         pix2struct_model_name: str     = "google/pix2struct-large",
+        verbose:         bool          = False,
     ) -> EvalResult:
         """Run evaluation on the given split. Returns EvalResult."""
         tokenizer       = self.model.tokenizer
@@ -145,7 +146,9 @@ class ViTextVQAEvaluator:
             image_dir=image_dir,
         )
 
-        return self.evaluate_dataset(dataset, limit=limit, global_step=global_step, split=split)
+        return self.evaluate_dataset(
+            dataset, limit=limit, global_step=global_step, split=split, verbose=verbose
+        )
 
     # ------------------------------------------------------------------
     def evaluate_dataset(
@@ -330,6 +333,11 @@ def _cli() -> None:
     parser.add_argument("--log_dir",        default="logs")
     parser.add_argument("--stage",          type=int, default=3)
     parser.add_argument("--limit",          type=int, default=None)
+    parser.add_argument(
+        "--verbose", action="store_true",
+        help="Print per-sample question/prediction/ground-truth/ANLS while running. "
+             "Use with a small --limit to diagnose why metrics are 0.",
+    )
     parser.add_argument("--max_new_tokens", type=int, default=64)
     parser.add_argument("--batch_size",     type=int, default=1)
     parser.add_argument("--load_in_4bit",   action="store_true")
@@ -411,6 +419,7 @@ def _cli() -> None:
         cache_dir=args.cache_dir,
         image_dir=args.image_dir or None,
         limit=args.limit,
+        verbose=args.verbose,
     )
 
     save_eval_result(result, args.output_dir)
