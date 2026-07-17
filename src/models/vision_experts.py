@@ -313,15 +313,24 @@ class MMoEVision(nn.Module):
         results: List[torch.Tensor] = []
         for expert in self.experts:
             if isinstance(expert, Pix2StructExpert):
-                if pix2struct_inputs is not None:
-                    tokens = expert(
-                        flattened_patches=pix2struct_inputs["flattened_patches"],
-                        attention_mask=pix2struct_inputs.get("attention_mask"),
+                if pix2struct_inputs is None:
+                    # Zeros here would silently blind the OCR branch: the model
+                    # trains/infers as if every image contained no text, and
+                    # learns to ignore this expert entirely. That failure mode
+                    # is invisible in the loss, so fail loudly instead
+                    # (project invariant: no silent fallback).
+                    raise ValueError(
+                        "[MMoEVision] Pix2StructExpert is active but "
+                        "pix2struct_inputs is None. Likely causes: the dataset "
+                        "was built without pix2struct_processor, or Pix2Struct "
+                        "preprocessing failed for a sample and the collator "
+                        "nulled the whole batch (see '[VietnameseDataset] "
+                        "Pix2Struct preprocess failed' warnings in the log)."
                     )
-                else:
-                    # Fallback: create dummy patches if Pix2Struct inputs unavailable
-                    B = pixel_values.shape[0]
-                    tokens = pixel_values.new_zeros(B, expert.target_tokens, expert.feature_dim)
+                tokens = expert(
+                    flattened_patches=pix2struct_inputs["flattened_patches"],
+                    attention_mask=pix2struct_inputs.get("attention_mask"),
+                )
             else:
                 tokens = expert(pixel_values)
             results.append(tokens)
