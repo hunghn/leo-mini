@@ -28,10 +28,17 @@ num_special: 3
 
 # Optimisation
 # Stage 1 only trains the projector (~few M params) — higher LR is fine.
+#
+# num_epochs=5: KTVIC is tiny (~3.7K images, ~19K (image,caption) pairs after
+# expansion in KTVICDataset). 1 epoch was ~30 optimizer steps at effective
+# batch 128 — far too few for a randomly-initialised 37M-param projector to
+# align (the model stayed blind: train CE ~6.5, captions unrelated to images).
+# 5 epochs ≈ 700+ steps. Gate before Stage 2: run src/eval/smoke_caption.py
+# and verify captions differ per image and describe actual content.
 learning_rate:         1.0e-3
 per_device_batch_size: 4
 gradient_accumulation: 16
-num_epochs:            1
+num_epochs:            5
 warmup_ratio:          0.03
 max_grad_norm:         1.0
 weight_decay:          0.0

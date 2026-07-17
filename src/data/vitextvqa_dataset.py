@@ -665,7 +665,38 @@ class VietnameseMultimodalDataset(Dataset):
 
 
 class KTVICDataset(VietnameseMultimodalDataset):
-    """Stage 1: Image Captioning (ai-enthusiasm-community/KTVIC)"""
+    """Stage 1: Image Captioning (ai-enthusiasm-community/KTVIC)
+
+    KTVIC has ~5 captions per image but the base __getitem__ trains on
+    answers[0] only. Stage-1 projector alignment is data-starved as it is
+    (~3.7K images), so expand to one training row per (image, caption) pair
+    instead of discarding 80% of the supervision signal.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._pairs: List[tuple] = []
+        for i in range(len(self._ds)):
+            n_caps = max(1, len(self._parse_answers(self._ds[i])))
+            self._pairs.extend((i, j) for j in range(n_caps))
+        print(
+            f"[KTVIC] Expanded {len(self._ds):,} images → "
+            f"{len(self._pairs):,} (image, caption) training pairs"
+        )
+
+    def __len__(self) -> int:
+        return len(self._pairs)
+
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
+        ds_idx, cap_idx = self._pairs[idx]
+        # _parse_answers rotates the list so the selected caption lands at
+        # answers[0], which is what the base __getitem__ trains on.
+        self._cap_idx = cap_idx
+        try:
+            return super().__getitem__(ds_idx)
+        finally:
+            self._cap_idx = 0
+
     def _parse_question(self, sample: Dict[str, Any]) -> str:
         return "Mô tả hình ảnh này một cách chi tiết."
 
@@ -676,7 +707,11 @@ class KTVICDataset(VietnameseMultimodalDataset):
             or sample.get("segment_caption_vi")
             or []
         )
-        return captions if isinstance(captions, list) else [str(captions)]
+        caps = captions if isinstance(captions, list) else [str(captions)]
+        j = getattr(self, "_cap_idx", 0)
+        if caps and 0 < j < len(caps):
+            caps = caps[j:] + caps[:j]
+        return caps
 
     def _parse_image_name(self, sample: Dict[str, Any], idx: int) -> str:
         img_field = sample.get("image")
