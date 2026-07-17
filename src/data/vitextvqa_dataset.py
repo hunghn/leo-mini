@@ -232,6 +232,45 @@ class VietnameseMultimodalDataset(Dataset):
                 else:
                     rows = [raw]
 
+                # The HF test split is a leaderboard-style file: every annotation
+                # carries the placeholder answers=["your answer"] instead of the
+                # real ones, which live in a separate ViTextVQA_test_gt.json with
+                # identical annotation ids. Merge them in — otherwise evaluation
+                # scores predictions against the placeholder string and reports
+                # ANLS/EM/F1 = 0 regardless of model quality.
+                if vt_split == "test":
+                    gt_local = hf_hub_download(
+                        repo_id=hf_name,
+                        repo_type="dataset",
+                        filename="ViTextVQA_test_gt.json",
+                        cache_dir=cache_dir,
+                    )
+                    with open(gt_local, encoding="utf-8-sig") as f:
+                        gt_raw = _json.load(f)
+                    gt_anns = gt_raw.get("annotations", []) if isinstance(gt_raw, dict) else gt_raw
+                    gt_by_id = {
+                        a["id"]: a["answers"]
+                        for a in gt_anns
+                        if "id" in a and a.get("answers")
+                    }
+                    n_merged = 0
+                    for row in rows:
+                        real_answers = gt_by_id.get(row.get("id"))
+                        if real_answers:
+                            row["answers"] = real_answers
+                            n_merged += 1
+                    if n_merged == 0:
+                        raise RuntimeError(
+                            "ViTextVQA test split: no ground-truth answers could be "
+                            "merged from ViTextVQA_test_gt.json (join key 'id'). "
+                            "Refusing to continue — evaluation would score against "
+                            "the 'your answer' placeholders and report 0."
+                        )
+                    print(
+                        f"[ViTextVQA] Merged real ground-truth answers from "
+                        f"ViTextVQA_test_gt.json for {n_merged}/{len(rows)} test annotations"
+                    )
+
                 # Try to download and extract the images zip (one-time setup).
                 # Each row gets an "image" field set to the local file path so
                 # _to_pil() can open it directly without needing vi_image_dir.
