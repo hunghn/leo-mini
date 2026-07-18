@@ -667,19 +667,29 @@ class VietnameseMultimodalDataset(Dataset):
 
     @staticmethod
     def _to_pil(image_obj: Any) -> Image.Image:
-        """Convert various image representations to PIL.Image.Image."""
+        """Convert various image representations to PIL.Image.Image.
+
+        Applies EXIF orientation (exif_transpose): ~1% of ViTextVQA photos
+        carry orientation=6/8 tags, and without this the vision experts (and
+        any OCR) see them rotated 90°.
+        """
+        from PIL import ImageOps
+
+        def _norm(img: Image.Image) -> Image.Image:
+            return ImageOps.exif_transpose(img).convert("RGB")
+
         if isinstance(image_obj, Image.Image):
-            return image_obj.convert("RGB")
+            return _norm(image_obj)
         if isinstance(image_obj, bytes):
-            return Image.open(io.BytesIO(image_obj)).convert("RGB")
+            return _norm(Image.open(io.BytesIO(image_obj)))
         if isinstance(image_obj, str):
-            return Image.open(image_obj).convert("RGB")
+            return _norm(Image.open(image_obj))
         if isinstance(image_obj, dict):
             # datasets library stores images as {"bytes": b"...", "path": "..."}
             if "bytes" in image_obj and image_obj["bytes"]:
-                return Image.open(io.BytesIO(image_obj["bytes"])).convert("RGB")
+                return _norm(Image.open(io.BytesIO(image_obj["bytes"])))
             if "path" in image_obj and image_obj["path"]:
-                return Image.open(image_obj["path"]).convert("RGB")
+                return _norm(Image.open(image_obj["path"]))
         raise ValueError(f"Cannot convert image object of type {type(image_obj)} to PIL")
 
     # --- Abstract methods for subclasses to implement ---
