@@ -29,15 +29,27 @@ num_special: 3
 # Optimisation
 # Stage 3 trains only adapters — lower LR prevents overwriting Stage 2 alignment.
 learning_rate:         2.0e-5
-per_device_batch_size: 4
-gradient_accumulation: 16
-num_epochs:            1
+# per_device 8 × accum 8 = effective batch 64 (same as before, better GPU
+# utilisation; Stage 3 only needs ~15GB at batch 4 — plenty of headroom).
+per_device_batch_size: 8
+gradient_accumulation: 8
+# num_epochs=3: ViTextVQA train is only 35K samples (~550 steps/epoch at
+# effective batch 64) vs the paper's 665K — CoTR + routers + LoRA start from
+# random init and need the extra passes. Watch dev ANLS at the mid-train eval
+# points; if it plateaus/drops after epoch 2, use the earlier checkpoint.
+num_epochs:            3
 warmup_ratio:          0.03
 max_grad_norm:         1.0
 weight_decay:          0.0
 lr_scheduler_type:     "cosine"
 max_length:            512
-dataloader_workers:    4
+dataloader_workers:    12
+
+# OCR-in-prompt: precomputed scene-text map (scripts/precompute_ocr.py).
+# Both training and mid-train eval prepend this text to the question.
+# MUST exist before training — generate it first:
+#   python scripts/precompute_ocr.py --image_dir <st_images dir> --output data/ocr/vitextvqa_ocr.json
+vi_ocr_json: "data/ocr/vitextvqa_ocr.json"
 save_steps:            200
 logging_steps:         10
 bf16:                  true

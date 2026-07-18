@@ -141,6 +141,8 @@ class LeoMiniTrainingArgs:
     vi_image_dir:   str = ""   # local dir of image files; required for ViTextVQA (Stage 3)
                                 # which does not embed image bytes in the HF dataset
     vi_cache_dir:   str = ""   # local HF cache dir (empty = HF default)
+    vi_ocr_json:    str = ""   # OCR map {image_name: text} from scripts/precompute_ocr.py;
+                               # when set, OCR text is prepended to every question (train + eval)
 
     # Vision expert subset — e.g. ["clip", "pix2struct"] for Vi-LEO-MINI.
     # Empty list means use the original 4-expert set.
@@ -390,6 +392,7 @@ def train(args: LeoMiniTrainingArgs) -> None:
             hf_dataset_name=hf_dataset_name,
             cache_dir=args.vi_cache_dir or None,
             image_dir=args.vi_image_dir or None,
+            ocr_json=args.vi_ocr_json or None,
         )
         vi_logger.log_custom(
             type="dataset_info",
@@ -443,6 +446,7 @@ def train(args: LeoMiniTrainingArgs) -> None:
             cache_dir=args.vi_cache_dir or None,
             for_eval=True,
             image_dir=args.vi_image_dir or None,
+            ocr_json=args.vi_ocr_json or None,
         )
         device = "cuda" if torch.cuda.is_available() else "cpu"
         val_evaluator = ViTextVQAEvaluator(

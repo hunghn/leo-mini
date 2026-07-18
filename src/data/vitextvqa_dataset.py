@@ -134,6 +134,7 @@ class VietnameseMultimodalDataset(Dataset):
         cache_dir:            Optional[str]   = None,
         for_eval:             bool            = False,
         image_dir:            Optional[str]   = None,
+        ocr_json:             Optional[str]   = None,
     ) -> None:
         super().__init__()
         self.tokenizer            = tokenizer
@@ -142,6 +143,21 @@ class VietnameseMultimodalDataset(Dataset):
         self.max_length           = max_length
         self.for_eval             = for_eval
         self.image_dir            = image_dir
+
+        # OCR-in-prompt: {image_name: "text đọc được từ ảnh"} produced by
+        # scripts/precompute_ocr.py. When present, the recognised text is
+        # prepended to the question so the LLM can ground scene-text answers
+        # explicitly instead of relying on the vision experts to read glyphs.
+        self._ocr_map: Optional[Dict[str, str]] = None
+        if ocr_json:
+            import json as _json
+            with open(ocr_json, encoding="utf-8") as f:
+                self._ocr_map = _json.load(f)
+            n_nonempty = sum(1 for v in self._ocr_map.values() if v)
+            print(
+                f"[VietnameseDataset] OCR map loaded from {ocr_json}: "
+                f"{len(self._ocr_map):,} images, {n_nonempty:,} with text"
+            )
 
         print(f"[VietnameseDataset] Downloading split='{split}' from {hf_dataset_name} ...")
         try:
@@ -492,6 +508,20 @@ class VietnameseMultimodalDataset(Dataset):
         question   = self._parse_question(sample)
         answers    = self._parse_answers(sample)
         image_obj  = sample.get("image")
+
+        # OCR-in-prompt (see __init__). Applied identically at train and eval
+        # time so the prompt distribution matches.
+        if self._ocr_map is not None:
+            ocr_text = self._ocr_map.get(str(sample.get("image_name") or ""))
+            if ocr_text:
+                # Cap OCR length so the prompt never truncates past the
+                # trailing "<|im_start|>assistant\n" (max_length=256 at eval).
+                if len(ocr_text) > 400:
+                    ocr_text = ocr_text[:400]
+                question = (
+                    f"Văn bản đọc được từ ảnh (OCR): {ocr_text}\n"
+                    f"Câu hỏi: {question}"
+                )
 
         # Use first answer for training (covers Stage 1/2/3)
         answer = answers[0] if answers else ""

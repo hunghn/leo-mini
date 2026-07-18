@@ -123,6 +123,7 @@ class ViTextVQAEvaluator:
         global_step:     int           = 0,
         pix2struct_model_name: str     = "google/pix2struct-large",
         verbose:         bool          = False,
+        ocr_json:        Optional[str] = None,
     ) -> EvalResult:
         """Run evaluation on the given split. Returns EvalResult."""
         tokenizer       = self.model.tokenizer
@@ -144,6 +145,7 @@ class ViTextVQAEvaluator:
             cache_dir=cache_dir,
             for_eval=True,
             image_dir=image_dir,
+            ocr_json=ocr_json,
         )
 
         return self.evaluate_dataset(
@@ -349,6 +351,15 @@ def _cli() -> None:
     # override this, e.g., --hf_dataset "uitnlp/OpenViVQA-dataset" for Stage 2.
     parser.add_argument("--cache_dir",      default=None)
     parser.add_argument(
+        "--ocr_json",
+        default=None,
+        help=(
+            "Path to OCR map JSON {image_name: text} from scripts/precompute_ocr.py. "
+            "When set, OCR text is prepended to every question (must match how the "
+            "checkpoint was trained)."
+        ),
+    )
+    parser.add_argument(
         "--image_dir",
         default=None,
         help=(
@@ -420,6 +431,7 @@ def _cli() -> None:
         image_dir=args.image_dir or None,
         limit=args.limit,
         verbose=args.verbose,
+        ocr_json=args.ocr_json,
     )
 
     save_eval_result(result, args.output_dir)
